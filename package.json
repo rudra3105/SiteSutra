@@ -9,6 +9,7 @@
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push --force",
+    "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/seed-local.js",
     "db:studio": "drizzle-kit studio",
     "postinstall": "echo \"Install complete - run npm run db:setup to initialize database\"",

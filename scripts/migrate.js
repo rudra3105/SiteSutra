@@ -6,6 +6,25 @@ const { execSync } = require('child_process')
 const path = require('path')
 const fs   = require('fs')
 
+// --- Load .env file manually if not already loaded (e.g., in local terminal) ---
+if (!process.env.DATABASE_URL) {
+  const envPath = path.join(__dirname, '../.env')
+  if (fs.existsSync(envPath)) {
+    const envFile = fs.readFileSync(envPath, 'utf-8')
+    envFile.split('\n').forEach(line => {
+      const [key, ...valueParts] = line.split('=')
+      if (key && valueParts.length > 0) {
+        let value = valueParts.join('=').trim()
+        // Remove quotes if present
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.substring(1, value.length - 1)
+        }
+        process.env[key.trim()] = value
+      }
+    })
+  }
+}
+
 const DATABASE_URL = process.env.DATABASE_URL
 
 // Skip if no DATABASE_URL (local dev uses SQLite file)
@@ -182,7 +201,6 @@ async function run() {
 }
 
 run().catch(err => {
-  console.error('Migration failed:', err.message)
-  // Don't crash the build if DB already set up
-  process.exit(0)
+  console.error('❌ Migration failed:', err.message)
+  process.exit(1)
 })
