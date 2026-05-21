@@ -1,0 +1,294 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth ───────────────────────────────────────────────────
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(SUPERVISOR)
+  avatar       String?
+  phone        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  siteAccess   SiteAccess[]
+  workLogs     WorkLog[]
+  attendances  Attendance[]
+  createdSites Site[]       @relation("SiteCreator")
+}
+
+enum Role {
+  ADMIN
+  SUPERVISOR
+}
+
+model SiteAccess {
+  id     String @id @default(cuid())
+  userId String
+  siteId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, siteId])
+}
+
+// ─── Sites ───────────────────────────────────────────────────
+model Site {
+  id          String     @id @default(cuid())
+  name        String
+  location    String
+  description String?
+  status      SiteStatus @default(ACTIVE)
+  startDate   DateTime
+  endDate     DateTime?
+  budget      Decimal    @default(0)
+  createdById String
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  createdBy    User         @relation("SiteCreator", fields: [createdById], references: [id])
+  siteAccess   SiteAccess[]
+  workLogs     WorkLog[]
+  materials    Material[]
+  materialLogs MaterialLog[]
+  labours      Labour[]
+  attendances  Attendance[]
+  accounting   Accounting[]
+  workTypes    WorkType[]
+  idealRules   IdealRule[]
+}
+
+enum SiteStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+// ─── Work Logs ───────────────────────────────────────────────
+model WorkLog {
+  id          String   @id @default(cuid())
+  siteId      String
+  userId      String
+  workTypeId  String
+  description String?
+  quantity    Decimal
+  unit        String
+  date        DateTime @default(now())
+  synced      Boolean  @default(true)
+  offlineId   String?  @unique
+  createdAt   DateTime @default(now())
+
+  site     Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id])
+  workType WorkType @relation(fields: [workTypeId], references: [id])
+}
+
+model WorkType {
+  id        String   @id @default(cuid())
+  siteId    String
+  name      String
+  unit      String
+  createdAt DateTime @default(now())
+
+  site       Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  workLogs   WorkLog[]
+  idealRules IdealRule[]
+}
+
+// ─── Materials ───────────────────────────────────────────────
+model Material {
+  id        String   @id @default(cuid())
+  siteId    String
+  name      String
+  unit      String
+  createdAt DateTime @default(now())
+
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  materialLogs MaterialLog[]
+  idealRules   IdealRule[]
+}
+
+model MaterialLog {
+  id         String          @id @default(cuid())
+  siteId     String
+  materialId String
+  type       MaterialLogType
+  quantity   Decimal
+  unitPrice  Decimal?
+  notes      String?
+  date       DateTime        @default(now())
+  synced     Boolean         @default(true)
+  offlineId  String?         @unique
+  createdAt  DateTime        @default(now())
+
+  site     Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id])
+}
+
+enum MaterialLogType {
+  PURCHASE
+  USAGE
+  RETURN
+  ADJUSTMENT
+}
+
+// ─── Ideal vs Actual Rules ───────────────────────────────────
+model IdealRule {
+  id           String  @id @default(cuid())
+  siteId       String
+  workTypeId   String
+  materialId   String
+  idealQtyPer  Decimal
+  description  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  workType  WorkType @relation(fields: [workTypeId], references: [id])
+  material  Material @relation(fields: [materialId], references: [id])
+}
+
+// ─── Labour ───────────────────────────────────────────────────
+model Labour {
+  id         String      @id @default(cuid())
+  siteId     String
+  name       String
+  phone      String?
+  trade      String
+  dailyWage  Decimal
+  status     LabourStatus @default(ACTIVE)
+  joinDate   DateTime
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  site        Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  attendances Attendance[]
+  payrolls    Payroll[]
+}
+
+enum LabourStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Attendance {
+  id        String           @id @default(cuid())
+  siteId    String
+  labourId  String
+  userId    String
+  date      DateTime
+  status    AttendanceStatus
+  halfDay   Boolean          @default(false)
+  overtime  Decimal?
+  notes     String?
+  synced    Boolean          @default(true)
+  offlineId String?          @unique
+  createdAt DateTime         @default(now())
+
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  labour Labour @relation(fields: [labourId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([labourId, date])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LEAVE
+  HOLIDAY
+}
+
+model Payroll {
+  id          String        @id @default(cuid())
+  labourId    String
+  periodStart DateTime
+  periodEnd   DateTime
+  totalDays   Decimal
+  dailyWage   Decimal
+  overtime    Decimal       @default(0)
+  deductions  Decimal       @default(0)
+  netAmount   Decimal
+  status      PayrollStatus @default(PENDING)
+  paidAt      DateTime?
+  paymentMode PaymentMode?
+  notes       String?
+  createdAt   DateTime      @default(now())
+
+  labour Labour @relation(fields: [labourId], references: [id])
+}
+
+enum PayrollStatus {
+  PENDING
+  PAID
+  PARTIAL
+}
+
+// ─── Accounting ───────────────────────────────────────────────
+model Accounting {
+  id          String          @id @default(cuid())
+  siteId      String
+  type        AccountingType
+  category    String
+  amount      Decimal
+  description String
+  paymentMode PaymentMode
+  reference   String?
+  date        DateTime        @default(now())
+  invoiceNo   String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  lpo  LPO? @relation(fields: [lpoId], references: [id])
+  lpoId String?
+}
+
+enum AccountingType {
+  INCOME
+  EXPENSE
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  BANK_TRANSFER
+  NEFT
+  RTGS
+  CHEQUE
+}
+
+model LPO {
+  id          String    @id @default(cuid())
+  siteId      String
+  lpoNumber   String    @unique
+  vendor      String
+  description String
+  amount      Decimal
+  status      LPOStatus @default(PENDING)
+  issueDate   DateTime  @default(now())
+  dueDate     DateTime?
+  createdAt   DateTime  @default(now())
+
+  accountings Accounting[]
+}
+
+enum LPOStatus {
+  PENDING
+  APPROVED
+  RECEIVED
+  CANCELLED
+}
