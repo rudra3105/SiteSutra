@@ -24,6 +24,10 @@ export async function loginAction(formData: FormData) {
     const [user] = await db.select().from(users)
       .where(eq(users.email, parsed.data.email.toLowerCase().trim()))
       .limit(1)
+      .catch(e => {
+        console.error('DATABASE SELECT ERROR:', e.message)
+        throw new Error(`DB_SELECT_FAILED: ${e.message}`)
+      })
 
     if (!user) return { error: 'Invalid email or password' }
     if (!user.isActive) return { error: 'Account is disabled. Contact admin.' }
