@@ -29,8 +29,8 @@ export const users = pgTable('users', {
   role:         text('role').notNull().default('SUPERVISOR'),
   phone:        text('phone'),
   isActive:     boolean('is_active').notNull().default(true),
-  createdAt:    text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:    text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:    text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:    text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Sites ─────────────────────────────────────────────────────
@@ -44,8 +44,8 @@ export const sites = pgTable('sites', {
   endDate:     text('end_date'),
   budget:      real('budget').notNull().default(0),
   createdById: text('created_by_id').notNull().references(() => users.id),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Site Access ───────────────────────────────────────────────
@@ -61,7 +61,7 @@ export const workTypes = pgTable('work_types', {
   siteId:    text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
   name:      text('name').notNull(),
   unit:      text('unit').notNull(),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Work Logs ─────────────────────────────────────────────────
@@ -76,7 +76,7 @@ export const workLogs = pgTable('work_logs', {
   date:        text('date').notNull(),
   synced:      boolean('synced').notNull().default(true),
   offlineId:   text('offline_id').unique(),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Materials ─────────────────────────────────────────────────
@@ -85,7 +85,7 @@ export const materials = pgTable('materials', {
   siteId:    text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
   name:      text('name').notNull(),
   unit:      text('unit').notNull(),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Material Logs ─────────────────────────────────────────────
@@ -100,7 +100,7 @@ export const materialLogs = pgTable('material_logs', {
   date:       text('date').notNull(),
   synced:     boolean('synced').notNull().default(true),
   offlineId:  text('offline_id').unique(),
-  createdAt:  text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:  text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Ideal Rules ───────────────────────────────────────────────
@@ -111,8 +111,8 @@ export const idealRules = pgTable('ideal_rules', {
   materialId:  text('material_id').notNull().references(() => materials.id),
   idealQtyPer: real('ideal_qty_per').notNull(),
   description: text('description'),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Labour ────────────────────────────────────────────────────
@@ -125,8 +125,8 @@ export const labour = pgTable('labour', {
   dailyWage: real('daily_wage').notNull(),
   status:    text('status').notNull().default('ACTIVE'),
   joinDate:  text('join_date').notNull(),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Attendance ────────────────────────────────────────────────
@@ -142,7 +142,7 @@ export const attendance = pgTable('attendance', {
   notes:     text('notes'),
   synced:    boolean('synced').notNull().default(true),
   offlineId: text('offline_id').unique(),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (t) => ({ uniqLabourDate: unique().on(t.labourId, t.date) }))
 
 // ── Payroll ───────────────────────────────────────────────────
@@ -160,7 +160,7 @@ export const payroll = pgTable('payroll', {
   paidAt:      text('paid_at'),
   paymentMode: text('payment_mode'),
   notes:       text('notes'),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Accounting ────────────────────────────────────────────────
@@ -176,8 +176,8 @@ export const accounting = pgTable('accounting', {
   date:        text('date').notNull(),
   invoiceNo:   text('invoice_no'),
   lpoId:       text('lpo_id'),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── LPOs ─────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ export const lpos = pgTable('lpos', {
   status:      text('status').notNull().default('PENDING'),
   issueDate:   text('issue_date').notNull(),
   dueDate:     text('due_date'),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 
@@ -202,8 +202,8 @@ export const cashbooks = pgTable('cashbooks', {
   name:        text('name').notNull(),
   description: text('description'),
   isActive:    boolean('is_active').notNull().default(true),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Cashbook Entries ──────────────────────────────────────────
@@ -223,7 +223,7 @@ export const cashbookEntries = pgTable('cashbook_entries', {
   lpoStatus:    text('lpo_status'),
   partyName:    text('party_name'),
   proofUrl:     text('proof_url'),
-  createdAt:    text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:    text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 
@@ -234,7 +234,7 @@ export const parties = pgTable('parties', {
   name:      text('name').notNull(),
   type:      text('type'),        // e.g. Supplier, Contractor, Client, Labour
   phone:     text('phone'),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 export type Party = typeof parties.$inferSelect
@@ -245,8 +245,8 @@ export const labourTeams = pgTable('labour_teams', {
   siteId:           text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
   name:             text('name').notNull(),
   attendanceMethod: text('attendance_method').notNull().default('INDIVIDUAL'), // INDIVIDUAL | TEAM
-  createdAt:        text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:        text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:        text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:        text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── Team Members ──────────────────────────────────────────────
@@ -254,7 +254,7 @@ export const teamMembers = pgTable('team_members', {
   id:        text('id').primaryKey(),
   teamId:    text('team_id').notNull().references(() => labourTeams.id, { onDelete: 'cascade' }),
   labourId:  text('labour_id').notNull().references(() => labour.id, { onDelete: 'cascade' }),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (t) => ({ uniq: unique().on(t.teamId, t.labourId) }))
 
 
@@ -268,8 +268,8 @@ export const siteLocations = pgTable('site_locations', {
   span:        text('span'),                     // e.g. "A-B", "250m"
   workStage:   text('work_stage').notNull().default('FOUNDATION'),
   notes:       text('notes'),
-  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP::text`),
-  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  createdAt:   text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:   text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 export type SiteLocation = typeof siteLocations.$inferSelect
@@ -280,7 +280,7 @@ export const siteWorkStatus = pgTable('site_work_status', {
   siteId:           text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }).unique(),
   workStage:        text('work_stage').notNull().default('FOUNDATION'), // FOUNDATION | ERECTION | STRINGING | FINISHING | COMPLETED
   attendanceMethod: text('attendance_method').notNull().default('INDIVIDUAL'), // INDIVIDUAL | TEAM
-  updatedAt:        text('updated_at').default(sql`CURRENT_TIMESTAMP::text`),
+  updatedAt:        text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 })
 
 // ── New Type exports ──────────────────────────────────────────
