@@ -54,8 +54,24 @@ try {
 const { Client } = pg
 
 async function run() {
-  const client = new Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } })
-  await client.connect()
+  console.log('🔗 Connecting to:', DATABASE_URL.split('@')[1] || 'DB')
+  const client = new Client({ 
+    connectionString: DATABASE_URL, 
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000, // 10 seconds timeout
+  })
+  
+  try {
+    await client.connect()
+  } catch (connErr) {
+    if (connErr.message.includes('ENETUNREACH')) {
+      console.error('\n❌ Network Unreachable Error:')
+      console.error('This usually means the deployment environment (like Vercel) cannot reach the Supabase IPv6 address.')
+      console.error('👉 FIX: Go to Supabase -> Settings -> Database -> Connection Pooler')
+      console.error('👉 Use the "Transaction" mode URL (usually port 6543) instead of the direct port 5432.\n')
+    }
+    throw connErr
+  }
 
   // ── Run SQL migration ──────────────────────────────────────
   console.log('→ Creating tables...')
