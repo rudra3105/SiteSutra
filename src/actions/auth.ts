@@ -24,7 +24,7 @@ export async function loginAction(formData: FormData) {
     const [user] = await db.select().from(users)
       .where(eq(users.email, parsed.data.email.toLowerCase().trim()))
       .limit(1)
-      .catch(e => {
+      .catch((e: any) => {
         console.error('DATABASE SELECT ERROR:', e.message)
         throw new Error(`DB_SELECT_FAILED: ${e.message}`)
       })
