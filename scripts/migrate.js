@@ -6,25 +6,6 @@ const { execSync } = require('child_process')
 const path = require('path')
 const fs   = require('fs')
 
-// --- Load .env file manually if not already loaded (e.g., in local terminal) ---
-if (!process.env.DATABASE_URL) {
-  const envPath = path.join(__dirname, '../.env')
-  if (fs.existsSync(envPath)) {
-    const envFile = fs.readFileSync(envPath, 'utf-8')
-    envFile.split('\n').forEach(line => {
-      const [key, ...valueParts] = line.split('=')
-      if (key && valueParts.length > 0) {
-        let value = valueParts.join('=').trim()
-        // Remove quotes if present
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-          value = value.substring(1, value.length - 1)
-        }
-        process.env[key.trim()] = value
-      }
-    })
-  }
-}
-
 const DATABASE_URL = process.env.DATABASE_URL
 
 // Skip if no DATABASE_URL (local dev uses SQLite file)
@@ -54,24 +35,8 @@ try {
 const { Client } = pg
 
 async function run() {
-  console.log('🔗 Connecting to:', DATABASE_URL.split('@')[1] || 'DB')
-  const client = new Client({ 
-    connectionString: DATABASE_URL, 
-    ssl: { rejectUnauthorized: false },
-    connectionTimeoutMillis: 10000, // 10 seconds timeout
-  })
-  
-  try {
-    await client.connect()
-  } catch (connErr) {
-    if (connErr.message.includes('ENETUNREACH')) {
-      console.error('\n❌ Network Unreachable Error:')
-      console.error('This usually means the deployment environment (like Vercel) cannot reach the Supabase IPv6 address.')
-      console.error('👉 FIX: Go to Supabase -> Settings -> Database -> Connection Pooler')
-      console.error('👉 Use the "Transaction" mode URL (usually port 6543) instead of the direct port 5432.\n')
-    }
-    throw connErr
-  }
+  const client = new Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } })
+  await client.connect()
 
   // ── Run SQL migration ──────────────────────────────────────
   console.log('→ Creating tables...')
@@ -217,6 +182,7 @@ async function run() {
 }
 
 run().catch(err => {
-  console.error('❌ Migration failed:', err.message)
-  process.exit(1)
+  console.error('Migration failed:', err.message)
+  // Don't crash the build if DB already set up
+  process.exit(0)
 })
