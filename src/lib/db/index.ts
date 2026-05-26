@@ -1,20 +1,22 @@
-// @ts-nocheck
+import { drizzle } from 'drizzle-orm/node-postgres'
+import { Pool } from 'pg'
 import * as schema from './schema'
 
-function createDB() {
-  const url = process.env.DATABASE_URL || 'file:./prisma/dev.db'
-
-  if (url.startsWith('postgres')) {
-    const { drizzle } = require('drizzle-orm/neon-http')
-    const { neon }    = require('@neondatabase/serverless')
-    return drizzle(neon(url), { schema })
+function createPool() {
+  const url = process.env.DATABASE_URL
+  if (!url) {
+    throw new Error('DATABASE_URL is required (PostgreSQL connection string)')
   }
-
-  const { drizzle }      = require('drizzle-orm/libsql')
-  const { createClient } = require('@libsql/client')
-  return drizzle(createClient({ url }), { schema })
+  const local = url.includes('localhost') || url.includes('127.0.0.1')
+  return new Pool({
+    connectionString: url,
+    ssl: local ? undefined : { rejectUnauthorized: false },
+  })
 }
 
-const g = globalThis as any
-export const db = g._sitesutra_db ?? (g._sitesutra_db = createDB())
+const g = globalThis as typeof globalThis & { _sitesutra_pool?: Pool }
+
+const pool = g._sitesutra_pool ?? (g._sitesutra_pool = createPool())
+
+export const db = drizzle(pool, { schema })
 export * from './schema'

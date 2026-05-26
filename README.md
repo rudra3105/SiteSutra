@@ -1,60 +1,86 @@
-# BuildTrack Pro — Construction Management System
+# SiteSutra — Construction Management System
 
-A production-grade Construction Management PWA built with Next.js 14, Drizzle ORM, SQLite (libsql), and Tailwind CSS.
-
-**Zero database setup required — works out of the box.**
+A production-grade Construction Management PWA built with Next.js 14, Drizzle ORM, PostgreSQL, and Tailwind CSS.
 
 ---
 
-## 🚀 Quick Start (3 commands)
+## Quick Start
+
+### 1. Prerequisites
+
+- Node.js 18+
+- A PostgreSQL database ([Supabase](https://supabase.com), [Neon](https://neon.tech), or local Postgres)
+
+### 2. Environment
+
+Copy `.env.example` to `.env` and set:
+
+```env
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+JWT_SECRET=your-long-random-secret
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+`DATABASE_URL` must be a PostgreSQL connection string (`postgresql://` or `postgres://`).
+
+### 3. Install, migrate, run
 
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Create database + tables + sample data
-npm run db:push && npm run db:seed
-
-# 3. Start the app
+npm run db:migrate   # create tables + seed sample data
 npm run dev
 ```
 
 Open http://localhost:3000
 
-**Login credentials:**
+**Login credentials (after seed):**
+
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | admin@buildtrack.com | admin123 |
-| Supervisor | supervisor@buildtrack.com | super123 |
-
-That's it. No PostgreSQL, no Neon, no external services needed.
+| Admin | admin@sitesutra.com | admin123 |
+| Supervisor | supervisor@sitesutra.com | super123 |
 
 ---
 
-## 🗄️ Database
+## Database
 
-Uses **SQLite via libsql** — a local file at `prisma/dev.db` that creates itself automatically.
+Uses **PostgreSQL** with [Drizzle ORM](https://orm.drizzle.team/) and the `pg` driver.
 
-- `npm run db:push` — Create/update database schema
-- `npm run db:seed` — Add sample data
-- `npm run db:studio` — Visual database browser
+| Command | Description |
+|---------|-------------|
+| `npm run db:migrate` | Run SQL migrations + seed (idempotent) |
+| `npm run db:push` | Push schema directly via drizzle-kit (dev) |
+| `npm run db:generate` | Generate new migration SQL from schema |
+| `npm run db:studio` | Open Drizzle Studio |
+| `npm run setup` | Alias for `db:migrate` |
+
+Migrations live in `drizzle/`:
+
+- `0000_migration.sql` — core tables
+- `0001_add_cashbook_extras.sql` — cashbook extensions
+- `meta/_journal.json` — Drizzle journal
+
+`npm run build` runs `scripts/migrate.js` before the Next.js build, so Vercel deploys apply migrations automatically when `DATABASE_URL` is set.
 
 ---
 
-## 📱 PWA Installation
+## PWA Installation
 
 ### Android (Chrome)
+
 Tap menu → "Add to Home Screen"
 
 ### iOS (Safari)
+
 Share button → "Add to Home Screen"
 
 ### Desktop (Chrome/Edge)
-Click install icon in address bar
+
+Click install icon in the address bar
 
 ---
 
-## 🏗️ Features
+## Features
 
 | Module | What it does |
 |--------|-------------|
@@ -69,31 +95,32 @@ Click install icon in address bar
 
 ---
 
-## 🌐 Deploy to Vercel (free)
+## Deploy to Vercel
 
 ```bash
-# 1. Push to GitHub
-git init && git add . && git commit -m "Initial commit"
-git remote add origin https://github.com/you/buildtrack.git
-git push -u origin main
-
-# 2. Go to vercel.com → New Project → Import repo
-# 3. Add environment variable:
-#    DATABASE_URL = file:./prisma/dev.db
-#    JWT_SECRET   = (any long random string)
-# 4. Deploy
+git push origin main
 ```
 
-> **Note for production:** For Vercel/cloud deployment, switch to [Turso](https://turso.tech) (free tier) by changing DATABASE_URL to `libsql://your-db.turso.io?authToken=...` — no code changes needed.
+In Vercel → Project → Settings → Environment Variables:
+
+| Variable | Example |
+|----------|---------|
+| `DATABASE_URL` | `postgresql://postgres:...@db.xxx.supabase.co:5432/postgres` |
+| `JWT_SECRET` | long random string |
+| `NEXT_PUBLIC_APP_URL` | `https://your-app.vercel.app` |
+
+Deploy. The build step runs migrations and seeds demo users (safe to re-run; uses `ON CONFLICT DO NOTHING`).
+
+**Supabase tip:** Use the direct connection string (port `5432`) from Project Settings → Database, not the pooler URL, for migrations.
 
 ---
 
-## 🔧 Tech Stack
+## Tech Stack
 
 | Layer | Tech |
 |-------|------|
 | Framework | Next.js 14 (App Router) |
-| Database | SQLite via @libsql/client |
+| Database | PostgreSQL (`pg`) |
 | ORM | Drizzle ORM |
 | Auth | Custom JWT (jose + bcryptjs) |
 | Styling | Tailwind CSS |
@@ -102,28 +129,28 @@ git push -u origin main
 
 ---
 
-## 📋 All npm scripts
+## npm scripts
 
 ```bash
 npm run dev          # Development server
-npm run build        # Production build
+npm run build        # Migrate DB + production build
 npm run start        # Start production server
-npm run db:push      # Apply schema to database
-npm run db:seed      # Seed sample data
-npm run db:studio    # Drizzle Studio (database GUI)
-npm run db:generate  # Generate migration files
+npm run db:migrate   # Run migrations + seed
+npm run db:push      # Push schema (drizzle-kit)
+npm run db:generate  # Generate migration files from schema
+npm run db:studio    # Drizzle Studio
 ```
 
 ---
 
-## 🔐 Roles
+## Roles
 
 | Feature | Admin | Supervisor |
 |---------|-------|------------|
-| All sites | ✅ | Assigned only |
-| Work logs | ✅ | ✅ |
-| Attendance | ✅ | ✅ |
-| Materials | ✅ | ✅ |
-| Accounting | ✅ | ❌ |
-| Reports | ✅ | ✅ |
-| User management | ✅ | ❌ |
+| All sites | Yes | Assigned only |
+| Work logs | Yes | Yes |
+| Attendance | Yes | Yes |
+| Materials | Yes | Yes |
+| Accounting | Yes | No |
+| Reports | Yes | Yes |
+| User management | Yes | No |
