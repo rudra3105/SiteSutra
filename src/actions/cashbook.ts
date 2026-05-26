@@ -159,7 +159,7 @@ export async function createCustomField(cashbookId: string, label: string, field
   await db.insert(cashbookCustomFields).values({
     id, cashbookId, label: label.trim(), fieldType,
     options: options.length > 0 ? JSON.stringify(options) : null,
-    required: required ? 1 : 0,
+    required,
     sortOrder: existing.length,
   })
   revalidatePath(`/sites/${siteId}/accounting`)
@@ -172,7 +172,7 @@ export async function updateCustomField(id: string, label: string, fieldType: st
   await db.update(cashbookCustomFields).set({
     label: label.trim(), fieldType,
     options: options.length > 0 ? JSON.stringify(options) : null,
-    required: required ? 1 : 0,
+    required,
   }).where(eq(cashbookCustomFields.id, id))
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
