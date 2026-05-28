@@ -8,14 +8,16 @@
     "start": "next start",
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node scripts/migrate.js",
-    "db:push": "drizzle-kit push",
+    "db:push": "node scripts/seed-local.js",
+    "db:seed": "node scripts/seed-local.js",
     "db:studio": "drizzle-kit studio",
-    "postinstall": "echo \"Install complete - run npm run db:migrate to initialize database\"",
-    "setup": "npm run db:migrate",
-    "db:setup": "npm run db:migrate"
+    "postinstall": "echo \"Install complete - run npm run db:setup to initialize database\"",
+    "setup": "npm run db:push && npm run db:seed",
+    "db:setup": "node scripts/seed-local.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.3",
+    "@neondatabase/serverless": "^0.10.4",
     "bcryptjs": "^2.4.3",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
@@ -23,7 +25,7 @@
     "jose": "^5.9.6",
     "next": "14.2.18",
     "next-pwa": "^5.6.0",
-    "pg": "^8.13.3",
+    "pg": "^8.21.0",
     "react": "^18",
     "react-dom": "^18",
     "recharts": "^2.13.3",
@@ -33,7 +35,6 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
-    "@types/pg": "^8.20.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "autoprefixer": "^10.0.1",

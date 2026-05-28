@@ -3,8 +3,10 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createLabour } from '@/actions/labour'
+import { Site } from '@/types'
+
 interface Props {
-  sites: { id: string; name: string }[]
+  sites: Site[]
   preselectedSite?: string
 }
 

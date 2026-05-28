@@ -1,22 +1,35 @@
-import { drizzle } from 'drizzle-orm/node-postgres'
-import { Pool } from 'pg'
+// @ts-nocheck
 import * as schema from './schema'
 
-function createPool() {
+function createDB() {
   const url = process.env.DATABASE_URL
+
   if (!url) {
-    throw new Error('DATABASE_URL is required (PostgreSQL connection string)')
+    // Local dev fallback — SQLite
+    const { drizzle }      = require('drizzle-orm/libsql')
+    const { createClient } = require('@libsql/client')
+    const localUrl = 'file:./dev.db'
+    return drizzle(createClient({ url: localUrl }), { schema })
   }
-  const local = url.includes('localhost') || url.includes('127.0.0.1')
-  return new Pool({
-    connectionString: url,
-    ssl: local ? undefined : { rejectUnauthorized: false },
-  })
+
+  if (url.startsWith('postgres') || url.startsWith('postgresql')) {
+    // Production — pure PostgreSQL via pg (NOT Neon, NOT neon-http)
+    const { drizzle } = require('drizzle-orm/node-postgres')
+    const { Pool }    = require('pg')
+    const pool = new Pool({
+      connectionString: url,
+      ssl: url.includes('localhost') ? false : { rejectUnauthorized: false },
+      max: 10,
+    })
+    return drizzle(pool, { schema })
+  }
+
+  // Local SQLite file
+  const { drizzle }      = require('drizzle-orm/libsql')
+  const { createClient } = require('@libsql/client')
+  return drizzle(createClient({ url }), { schema })
 }
 
-const g = globalThis as typeof globalThis & { _sitesutra_pool?: Pool }
-
-const pool = g._sitesutra_pool ?? (g._sitesutra_pool = createPool())
-
-export const db = drizzle(pool, { schema })
+const g = globalThis as any
+export const db = g._sitesutra_db ?? (g._sitesutra_db = createDB())
 export * from './schema'

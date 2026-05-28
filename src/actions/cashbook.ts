@@ -27,7 +27,7 @@ export async function getCashbooks(siteId: string) {
 export async function updateCashbook(id: string, name: string, description: string, siteId: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
-  await db.update(cashbooks).set({ name: name.trim(), description: description?.trim() || null, updatedAt: new Date().toISOString() }).where(eq(cashbooks.id, id))
+  await db.update(cashbooks).set({ name: name.trim(), description: description?.trim() || null }).where(eq(cashbooks.id, id))
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
 }
@@ -109,18 +109,23 @@ export async function deleteCashbookEntry(id: string, siteId: string) {
 
 // ── Parties CRUD ──────────────────────────────────────────────
 
-export async function getParties(siteId: string) {
+export async function getParties(siteId: string, cashbookId?: string) {
   const session = await requireSession()
   if (!session) return []
+  if (cashbookId) {
+    return db.select().from(parties)
+      .where(and(eq(parties.siteId, siteId), eq(parties.cashbookId, cashbookId)))
+      .orderBy(parties.name)
+  }
   return db.select().from(parties).where(eq(parties.siteId, siteId)).orderBy(parties.name)
 }
 
-export async function createParty(siteId: string, name: string, type?: string, phone?: string) {
+export async function createParty(siteId: string, name: string, type?: string, phone?: string, cashbookId?: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
   if (!name?.trim()) return { error: 'Party name is required' }
   const id = crypto.randomUUID()
-  await db.insert(parties).values({ id, siteId, name: name.trim(), type: type?.trim() || null, phone: phone?.trim() || null })
+  await db.insert(parties).values({ id, siteId, cashbookId: cashbookId || null, name: name.trim(), type: type?.trim() || null, phone: phone?.trim() || null })
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true, id, name: name.trim() }
 }
@@ -159,7 +164,7 @@ export async function createCustomField(cashbookId: string, label: string, field
   await db.insert(cashbookCustomFields).values({
     id, cashbookId, label: label.trim(), fieldType,
     options: options.length > 0 ? JSON.stringify(options) : null,
-    required,
+    required: required ? 1 : 0,
     sortOrder: existing.length,
   })
   revalidatePath(`/sites/${siteId}/accounting`)
@@ -172,7 +177,7 @@ export async function updateCustomField(id: string, label: string, fieldType: st
   await db.update(cashbookCustomFields).set({
     label: label.trim(), fieldType,
     options: options.length > 0 ? JSON.stringify(options) : null,
-    required,
+    required: required ? 1 : 0,
   }).where(eq(cashbookCustomFields.id, id))
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
@@ -238,4 +243,42 @@ export async function deleteCashbookAccess(id: string, siteId: string) {
   await db.delete(cashbookAccess).where(eq(cashbookAccess.id, id))
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
+}
+
+export async function getCashbookSummary(cashbookId: string) {
+  const entries = await getCashbookEntries(cashbookId)
+  const income  = entries.filter((e: any) => e.type === 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
+  const expense = entries.filter((e: any) => e.type === 'IN').reduce((s: number, e: any) => s + e.amount, 0)
+  return { income, expense, net: income - expense, entries }
+}
+
+// ── Cross-book category report ────────────────────────────────
+export async function getAllEntriesBySite(siteId: string, filters?: {
+  category?: string; dateFrom?: string; dateTo?: string; type?: string; party?: string
+}) {
+  const session = await requireSession()
+  if (!session) return []
+  // Get all books for this site
+  const books = await db.select().from(cashbooks).where(eq(cashbooks.siteId, siteId))
+  if (!books.length) return []
+
+  const { inArray } = await import('drizzle-orm')
+  const bookIds = books.map((b: any) => b.id)
+  let allEntries: any[] = await db.select().from(cashbookEntries)
+    .where(inArray(cashbookEntries.cashbookId, bookIds))
+    .orderBy(cashbookEntries.date)
+
+  // Attach book name to each entry
+  const bookMap: Record<string, string> = {}
+  books.forEach((b: any) => { bookMap[b.id] = b.name })
+  allEntries = allEntries.map((e: any) => ({ ...e, bookName: bookMap[e.cashbookId] ?? '' }))
+
+  // Apply filters
+  if (filters?.category) allEntries = allEntries.filter((e: any) => e.category === filters.category)
+  if (filters?.type)     allEntries = allEntries.filter((e: any) => e.type === filters.type)
+  if (filters?.party)    allEntries = allEntries.filter((e: any) => e.partyName === filters.party)
+  if (filters?.dateFrom) allEntries = allEntries.filter((e: any) => e.date >= filters.dateFrom!)
+  if (filters?.dateTo)   allEntries = allEntries.filter((e: any) => e.date <= filters.dateTo!)
+
+  return allEntries
 }

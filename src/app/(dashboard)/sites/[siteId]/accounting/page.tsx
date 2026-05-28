@@ -17,11 +17,7 @@ export default async function SiteAccountingPage({ params }) {
   ])
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-bold text-slate-900">Cashbook</h2>
-        <p className="text-slate-600 text-sm">Manage income, expenses and LPOs per cashbook</p>
-      </div>
+    <div className="flex flex-col h-full -m-4 lg:-m-6">
       <CashbookView
         siteId={params.siteId}
         initialBooks={books}

@@ -61,6 +61,8 @@ function Footer() {
 
 export function AppShell({ children, session }: { children: React.ReactNode; session: any }) {
   const pathname = usePathname()
+  // When inside a specific site, SiteShell provides its own sidebar — hide AppShell sidebar
+  const isSitePage = /^\/sites\/[^/]+(\/|$)/.test(pathname)
   const [open, setOpen] = useState(false)
   const { pendingCount, isSyncing, syncNow } = useOnlineSync()
 
@@ -83,8 +85,8 @@ export function AppShell({ children, session }: { children: React.ReactNode; ses
   return (
     <div className="flex h-screen h-dvh overflow-hidden bg-slate-100">
 
-      {/* Desktop sidebar */}
-      <aside className="hidden lg:flex flex-col w-64 bg-white border-r border-slate-200 flex-shrink-0">
+      {/* Desktop sidebar — hidden inside site pages (SiteShell has its own) */}
+      <aside className={`hidden lg:flex flex-col w-64 bg-white border-r border-slate-200 flex-shrink-0 ${isSitePage ? "!hidden" : ""}`}>
         <div className="flex items-center px-5 h-16 border-b border-slate-200">
           <Logo />
         </div>
@@ -160,11 +162,11 @@ export function AppShell({ children, session }: { children: React.ReactNode; ses
       )}
 
       {/* Main */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden" style={isSitePage ? {width:"100%"} : {}}>
         <OfflineBanner />
 
-        {/* Mobile top bar */}
-        <header className="lg:hidden flex items-center justify-between px-4 h-14 bg-white border-b border-slate-200 flex-shrink-0 shadow-sm">
+        {/* Mobile top bar — hidden on site pages */}
+        <header className={isSitePage ? "hidden" : "lg:hidden flex items-center justify-between px-4 h-14 bg-white border-b border-slate-200 flex-shrink-0 shadow-sm"}>
           <button onClick={() => setOpen(true)} className="text-slate-700 hover:text-slate-900 p-1.5 rounded-lg hover:bg-slate-100 -ml-1">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -187,8 +189,8 @@ export function AppShell({ children, session }: { children: React.ReactNode; ses
           </div>
         </main>
 
-        {/* Mobile bottom nav */}
-        <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex items-stretch justify-around pb-safe z-40 shadow-lg">
+        {/* Mobile bottom nav — hidden on site pages */}
+        {!isSitePage && <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex items-stretch justify-around pb-safe z-40 shadow-lg">
           {bottomNav.map(item => {
             const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
             return (
@@ -203,7 +205,7 @@ export function AppShell({ children, session }: { children: React.ReactNode; ses
               </Link>
             )
           })}
-        </nav>
+        </nav>}
       </div>
     </div>
   )

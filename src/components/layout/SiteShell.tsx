@@ -117,7 +117,7 @@ export function SiteShell({
   const items = navItems(site.id, isAdmin)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-screen h-dvh overflow-hidden">
       {/* Site header banner */}
       <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3 flex-shrink-0 shadow-sm">
         <Link
@@ -194,7 +194,7 @@ export function SiteShell({
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto bg-slate-100">
-          <div className="p-4 lg:p-6 pb-24 lg:pb-8 max-w-6xl mx-auto">
+          <div className="p-4 lg:p-6 pb-24 lg:pb-0 max-w-[1400px] mx-auto h-full flex flex-col">
             {children}
           </div>
         </main>
