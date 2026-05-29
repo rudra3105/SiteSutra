@@ -127,3 +127,5 @@ npm run db:generate  # Generate migration files
 | Accounting | ✅ | ❌ |
 | Reports | ✅ | ✅ |
 | User management | ✅ | ❌ |
+
+
