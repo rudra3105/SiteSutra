@@ -111,9 +111,9 @@ function EditableDropdown({
 }
 
 // ── Party Selector (same pattern, no nested form) ─────────────
-function PartySelector({ parties, value, onChange, onPartyAdded, siteId, cashbookId }: {
+function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
   parties: any[]; value: string; onChange: (v: string) => void
-  onPartyAdded: (p: any) => void; siteId: string; cashbookId?: string
+  onPartyAdded: (p: any) => void; siteId: string
 }) {
   const [open, setOpen]         = useState(false)
   const [search, setSearch]     = useState('')
@@ -137,7 +137,7 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId, cashboo
     if (!newName.trim()) { setErr('Name required'); return }
     setAdding(true); setErr('')
     try {
-      const r = await createParty(siteId, newName.trim(), newType || undefined, newPhone || undefined, cashbookId)
+      const r = await createParty(siteId, newName.trim(), newType || undefined, newPhone || undefined)
       if (!r) { setErr('No response'); setAdding(false); return }
       if (r.error) { setErr(r.error); setAdding(false); return }
       const p = { id: r.id, name: r.name ?? newName.trim(), type: newType, phone: newPhone }
@@ -365,7 +365,7 @@ function EntryDrawer({
           {/* Party */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Party Name</label>
-            <PartySelector parties={parties} value={partyName} onChange={setPartyName} onPartyAdded={onPartyAdded} siteId={siteId} cashbookId={cashbookId} />
+            <PartySelector parties={parties} value={partyName} onChange={setPartyName} onPartyAdded={onPartyAdded} siteId={siteId} />
           </div>
 
           {/* Details / Description */}
@@ -437,19 +437,13 @@ function EntryDrawer({
 }
 
 // ── Export helpers ────────────────────────────────────────────
-function exportToCSV(entries: any[], bookName: string, crossBook = false) {
-  const headers = crossBook
-    ? ['Book', 'Date & Time', 'Type', 'Details', 'Party', 'Category', 'Mode', 'Bill', 'Amount (₹)']
-    : ['Date & Time', 'Type', 'Details', 'Party', 'Category', 'Mode', 'Bill', 'Amount (₹)', 'Balance (₹)']
+function exportToCSV(entries: any[], bookName: string) {
+  const headers = ['Date & Time', 'Details', 'Party', 'Category', 'Mode', 'Bill', 'Amount (₹)', 'Balance (₹)']
   let balance = 0
   const rows = [...entries].reverse().map(e => {
     const amt = e.type === 'OUT' ? e.amount : -e.amount
     balance += amt
-    const typeLabel = e.type === 'OUT' ? 'Cash In' : 'Cash Out'
-    if (crossBook) {
-      return [e.bookName ?? '', e.date, typeLabel, e.description ?? '', e.partyName ?? '', e.category ?? '', e.paymentMode ?? '', e.proofUrl ? 'Yes' : '', e.amount.toFixed(2)]
-    }
-    return [e.date, typeLabel, e.description ?? '', e.partyName ?? '', e.category ?? '', e.paymentMode ?? '', e.proofUrl ? 'Yes' : '', e.amount.toFixed(2), balance.toFixed(2)]
+    return [e.date, e.description ?? '', e.partyName ?? '', e.category ?? '', e.paymentMode ?? '', e.proofUrl ? 'Yes' : '', e.amount.toFixed(2), balance.toFixed(2)]
   })
   const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
@@ -458,27 +452,22 @@ function exportToCSV(entries: any[], bookName: string, crossBook = false) {
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-function exportToPDF(entries: any[], bookName: string, summary: any, crossBook = false) {
+function exportToPDF(entries: any[], bookName: string, summary: any) {
   let balance = 0
   const tableRows = [...entries].reverse().map(e => {
     const amt = e.type === 'OUT' ? e.amount : -e.amount; balance += amt
     const isOut = e.type === 'OUT'
-    const bookCol = crossBook ? `<td style="font-size:10px;color:#64748b;white-space:nowrap">${e.bookName ?? ''}</td>` : ''
-    const balCol  = crossBook ? '' : `<td style="text-align:right;font-weight:600;color:${balance >= 0 ? '#16a34a' : '#dc2626'}">${fmtAmt(balance)}</td>`
     return `<tr>
-      ${bookCol}
       <td style="white-space:pre-line">${e.date ? new Date(e.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) + '\n' + new Date(e.date).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}).toUpperCase() : ''}</td>
       <td><strong>${e.description ?? ''}</strong>${e.partyName ? `<br><span style="color:#64748b;font-size:10px">${e.partyName}</span>` : ''}</td>
       <td>${e.category ?? ''}</td>
       <td>${e.paymentMode ?? ''}</td>
       <td style="text-align:center">${e.proofUrl ? '✓' : ''}</td>
       <td style="text-align:right;color:${isOut ? '#16a34a' : '#dc2626'};font-weight:700">${isOut ? '' : '-'}${fmtAmt(e.amount)}</td>
-      ${balCol}
+      <td style="text-align:right;font-weight:600;color:${balance >= 0 ? '#16a34a' : '#dc2626'}">${fmtAmt(balance)}</td>
     </tr>`
   }).join('')
 
-  const bookTh  = crossBook ? '<th>Book</th>' : ''
-  const balTh   = crossBook ? '' : '<th style="text-align:right">Balance (₹)</th>'
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bookName}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -509,7 +498,7 @@ function exportToPDF(entries: any[], bookName: string, summary: any, crossBook =
   <div class="card"><div class="card-label">Net Balance</div><div class="card-value ${summary.net >= 0 ? 'green' : 'red'}">₹${fmtAmt(Math.abs(summary.net))}</div></div>
 </div>
 <table>
-  <thead><tr>${bookTh}<th>Date & Time</th><th>Details</th><th>Category</th><th>Mode</th><th>Bill</th><th style="text-align:right">Amount (₹)</th>${balTh}</tr></thead>
+  <thead><tr><th>Date & Time</th><th>Details</th><th>Category</th><th>Mode</th><th>Bill</th><th style="text-align:right">Amount (₹)</th><th style="text-align:right">Balance (₹)</th></tr></thead>
   <tbody>${tableRows}</tbody>
 </table>
 <div class="footer">SiteSutra · Developed by Webrise Global (webriseglobal.com)</div>
@@ -538,6 +527,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [selected, setSelected]           = useState<Set<string>>(new Set())
   const [loading, setLoading]             = useState(false)
   const [ok, setOk]                       = useState('')
+  const initialLoadRef = useRef(false)
 
   // Modals/drawers
   const [drawer, setDrawer]     = useState<{ open: boolean; entry?: any }>({ open: false })
@@ -545,14 +535,6 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [viewEntry, setViewEntry] = useState<any>(null)
   const [editingBook, setEditingBook] = useState<any>(null)
   const [error, setError]       = useState('')
-  // Cross-book report state
-  const [crossModal, setCrossModal]   = useState(false)
-  const [crossCategory, setCrossCategory] = useState('')
-  const [crossDateFrom, setCrossDateFrom] = useState('')
-  const [crossDateTo, setCrossDateTo]     = useState('')
-  const [crossType, setCrossType]         = useState('')
-  const [crossParty, setCrossParty]       = useState('')
-  const [crossLoading, setCrossLoading]   = useState(false)
 
   // Custom field config state
   const [cfLabel, setCfLabel]   = useState('')
@@ -578,21 +560,24 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
 
   async function loadBook(bookId: string) {
     setSelectedBook(bookId); setEntries([]); setPage(1); setSelected(new Set())
-    const [entriesRes, fields, bookParties] = await Promise.all([
+    const [entriesRes, fields] = await Promise.all([
       fetch(`/api/cashbook/${bookId}/entries`).then(r => r.json()),
       getCustomFields(bookId),
-      fetch(`/api/parties?siteId=${siteId}&cashbookId=${bookId}`).then(r => r.json()),
     ])
     setEntries(entriesRes.entries ?? [])
     setCustomFields(fields ?? [])
-    setParties(Array.isArray(bookParties) ? bookParties : [])
   }
 
   useEffect(() => {
-    if (selectedBook) {
-      fetch(`/api/parties?siteId=${siteId}&cashbookId=${selectedBook}`).then(r => r.json())
-        .then(d => { if (Array.isArray(d)) setParties(d) }).catch(() => {})
+    if (!initialLoadRef.current) {
+      initialLoadRef.current = true
+      if (selectedBook) loadBook(selectedBook)
     }
+  }, [selectedBook])
+
+  useEffect(() => {
+    fetch(`/api/parties?siteId=${siteId}`).then(r => r.json())
+      .then(d => { if (Array.isArray(d) && d.length > 0) setParties(d) }).catch(() => {})
   }, [siteId])
 
   // ── Book CRUD ────────────────────────────────────────────────
@@ -717,37 +702,6 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const uniqueCategories = [...new Set(entries.map(e => e.category).filter(Boolean))]
   const uniqueModes      = [...new Set(entries.map(e => e.paymentMode).filter(Boolean))]
 
-  // Cross-book export handlers
-  async function handleCrossExport(format: 'csv' | 'pdf') {
-    setCrossLoading(true)
-    const params = new URLSearchParams({ siteId })
-    if (crossCategory) params.set('category', crossCategory)
-    if (crossDateFrom) params.set('dateFrom', crossDateFrom)
-    if (crossDateTo)   params.set('dateTo', crossDateTo)
-    if (crossType)     params.set('type', crossType)
-    const res  = await fetch(`/api/cashbook/export?${params}`)
-    const data = await res.json()
-    let allEntries = data.entries ?? []
-    // Apply party filter client-side (cross-book, party names may differ)
-    if (crossParty) allEntries = allEntries.filter((e: any) => e.partyName === crossParty)
-    const income  = allEntries.filter((e: any) => e.type === 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
-    const expense = allEntries.filter((e: any) => e.type !== 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
-    const label = [
-      crossCategory ? `Category: ${crossCategory}` : '',
-      crossParty    ? `Party: ${crossParty}`        : '',
-      crossType     ? (crossType === 'OUT' ? 'Cash In' : 'Cash Out') : '',
-      crossDateFrom && crossDateTo ? `${crossDateFrom} to ${crossDateTo}` : crossDateFrom ? `From ${crossDateFrom}` : crossDateTo ? `To ${crossDateTo}` : '',
-    ].filter(Boolean).join(' · ')
-    const title = `All Books — ${label || 'Complete Report'}`
-    if (format === 'csv') exportToCSV(allEntries, title, true)
-    else exportToPDF(allEntries, title, { income, expense, net: income - expense }, true)
-    setCrossLoading(false)
-    setCrossModal(false)
-  }
-
-  // Unique categories across all entries for cross-book filter
-  const allUniqueCategories = [...new Set(entries.map((e:any) => e.category).filter(Boolean))]
-
   return (
     <div className="flex flex-col h-full bg-white">
       {ok && <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-200 text-emerald-800 text-sm font-semibold text-center">✓ {ok}</div>}
@@ -803,20 +757,13 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
             <div className="text-slate-300">|</div>
             <div className="flex items-center gap-1.5"><span className="text-slate-600">Balance:</span><span className={`font-bold ${net >= 0 ? 'text-green-700' : 'text-red-600'}`}>₹{fmtAmt(Math.abs(net))}</span></div>
             <div className="ml-auto flex gap-2">
-              {hasFilters && (
-                <span className="text-xs text-slate-500 italic mr-1">Exporting filtered view</span>
-              )}
               <button type="button" onClick={() => exportToCSV(filtered, currentBook?.name ?? 'Cashbook')}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-green-700 hover:border-green-300 text-xs font-semibold transition-colors" title={hasFilters ? 'Export filtered entries to CSV' : 'Export all entries to CSV'}>
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-green-700 hover:border-green-300 text-xs font-semibold transition-colors">
                 ↓ CSV
               </button>
               <button type="button" onClick={() => exportToPDF(filtered, currentBook?.name ?? 'Cashbook', { income, expense, net })}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 text-xs font-semibold transition-colors" title={hasFilters ? 'Export filtered entries to PDF' : 'Export all entries to PDF'}>
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 text-xs font-semibold transition-colors">
                 ↓ PDF
-              </button>
-              <button type="button" onClick={() => { setCrossModal(true); setCrossCategory(''); setCrossDateFrom(''); setCrossDateTo(''); setCrossType('') }}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white border border-blue-600 hover:bg-blue-700 text-xs font-semibold transition-colors">
-                📊 All Books Report
               </button>
             </div>
           </div>
@@ -964,101 +911,6 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
             </div>
           )}
         </>
-      )}
-
-      {/* ── Cross-Book Report Modal ── */}
-      {crossModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-            <div className="p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-lg">📊 All Books Report</h3>
-                  <p className="text-slate-500 text-xs mt-0.5">Export entries from all cashbooks with filters</p>
-                </div>
-                <button type="button" onClick={() => setCrossModal(false)} className="text-slate-400 hover:text-slate-700 text-xl">✕</button>
-              </div>
-
-              <div className="space-y-3">
-                {/* Category filter */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
-                    Category <span className="text-slate-400 font-normal normal-case">(filter by one category across all books)</span>
-                  </label>
-                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={crossCategory} onChange={e => setCrossCategory(e.target.value)}>
-                    <option value="">All Categories</option>
-                    {[...new Set(entries.map((e: any) => e.category).filter(Boolean))].map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Type filter */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Transaction Type</label>
-                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={crossType} onChange={e => setCrossType(e.target.value)}>
-                    <option value="">All Types</option>
-                    <option value="OUT">Cash In (You Received)</option>
-                    <option value="IN">Cash Out (You Gave)</option>
-                  </select>
-                </div>
-
-                {/* Party filter */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
-                    Party <span className="text-slate-400 font-normal normal-case">(from current book's entries)</span>
-                  </label>
-                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={crossParty} onChange={e => setCrossParty(e.target.value)}>
-                    <option value="">All Parties</option>
-                    {[...new Set(entries.map((e: any) => e.partyName).filter(Boolean))].map(p => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Date range */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">From Date</label>
-                    <input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={crossDateFrom} onChange={e => setCrossDateFrom(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">To Date</label>
-                    <input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={crossDateTo} onChange={e => setCrossDateTo(e.target.value)} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Summary of what will be exported */}
-              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-xs text-slate-600 space-y-1">
-                <p className="font-semibold text-slate-700">Report will include:</p>
-                <p>📚 Entries from <strong>all {books.length} cashbook{books.length !== 1 ? 's' : ''}</strong></p>
-                {crossCategory && <p>📂 Category: <strong>{crossCategory}</strong></p>}
-                {crossParty    && <p>👤 Party: <strong>{crossParty}</strong></p>}
-                {crossType     && <p>💱 Type: <strong>{crossType === 'OUT' ? 'Cash In' : 'Cash Out'}</strong></p>}
-                {(crossDateFrom || crossDateTo) && <p>📅 Date: <strong>{crossDateFrom || '—'} to {crossDateTo || '—'}</strong></p>}
-                {!crossCategory && !crossParty && !crossType && !crossDateFrom && !crossDateTo && <p className="text-slate-400 italic">All entries (no filter applied)</p>}
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setCrossModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
-                <button type="button" onClick={() => handleCrossExport('csv')} disabled={crossLoading}
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-60">
-                  {crossLoading ? 'Preparing...' : '↓ Export CSV'}
-                </button>
-                <button type="button" onClick={() => handleCrossExport('pdf')} disabled={crossLoading}
-                  className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 disabled:opacity-60">
-                  {crossLoading ? 'Preparing...' : '↓ Export PDF'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* ── Entry Drawer ── */}

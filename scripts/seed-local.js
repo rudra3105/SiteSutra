@@ -101,10 +101,8 @@ async function run() {
       created_at TEXT DEFAULT (datetime('now')), updated_at TEXT)`,
 
     `CREATE TABLE IF NOT EXISTS parties (
-      id TEXT PRIMARY KEY, site_id TEXT NOT NULL,
-      cashbook_id TEXT,
-      name TEXT NOT NULL, type TEXT, phone TEXT,
-      created_at TEXT DEFAULT (datetime('now')))`,
+      id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
+      type TEXT, phone TEXT, created_at TEXT DEFAULT (datetime('now')))`,
 
     `CREATE TABLE IF NOT EXISTS cashbook_custom_fields (
       id TEXT PRIMARY KEY, cashbook_id TEXT NOT NULL, label TEXT NOT NULL,
@@ -219,9 +217,9 @@ async function run() {
     { sql: 'INSERT OR IGNORE INTO cashbook_entries (id,cashbook_id,site_id,type,category,amount,description,payment_mode,party_name,date) VALUES (?,?,?,?,?,?,?,?,?,?)', args: ['cbe-004','book-001','site-001','OUT','Client Payment',2000000,'Second instalment payment','NEFT','ABC Developers',today] },
 
     // Parties
-    { sql: 'INSERT OR IGNORE INTO parties (id,site_id,cashbook_id,name,type,phone) VALUES (?,?,?,?,?,?)', args: ['party-001','site-001','book-001','ABC Developers','Client','+91 98000 11111'] },
-    { sql: 'INSERT OR IGNORE INTO parties (id,site_id,cashbook_id,name,type,phone) VALUES (?,?,?,?,?,?)', args: ['party-002','site-001','book-001','Shree Cement Suppliers','Supplier','+91 98000 22222'] },
-    { sql: 'INSERT OR IGNORE INTO parties (id,site_id,cashbook_id,name,type,phone) VALUES (?,?,?,?,?,?)', args: ['party-003','site-001','book-001','Ravi Labour Contractor','Labour Contractor','+91 98000 33333'] },
+    { sql: 'INSERT OR IGNORE INTO parties (id,site_id,name,type,phone) VALUES (?,?,?,?,?)', args: ['party-001','site-001','ABC Developers','Client','+91 98000 11111'] },
+    { sql: 'INSERT OR IGNORE INTO parties (id,site_id,name,type,phone) VALUES (?,?,?,?,?)', args: ['party-002','site-001','Shree Cement Suppliers','Supplier','+91 98000 22222'] },
+    { sql: 'INSERT OR IGNORE INTO parties (id,site_id,name,type,phone) VALUES (?,?,?,?,?)', args: ['party-003','site-001','Ravi Labour Contractor','Labour Contractor','+91 98000 33333'] },
 
     // LPOs
     { sql: 'INSERT OR IGNORE INTO lpos (id,site_id,lpo_number,vendor,description,amount,status,issue_date) VALUES (?,?,?,?,?,?,?,?)', args: ['lpo-001','site-001','LPO-2024-001','Shree Cement Suppliers','Cement Sand Aggregate',850000,'APPROVED',d2] },

@@ -38,7 +38,7 @@ export async function createAccountingEntry(data: Record<string, unknown>) {
   if (!parsed.success) return { error: parsed.error.errors[0].message }
   const id = crypto.randomUUID()
   await db.insert(accounting).values({ id, ...parsed.data, date: parsed.data.date || new Date().toISOString().split('T')[0] })
-  revalidatePath('/accounting')
+  revalidatePath(`/sites/${parsed.data.siteId}/accounting`)
   return { success: true, id }
 }
 
@@ -92,7 +92,7 @@ export async function createLPO(data: Record<string, unknown>) {
   if (!parsed.success) return { error: parsed.error.errors[0].message }
   const id = crypto.randomUUID()
   await db.insert(lpos).values({ id, ...parsed.data, issueDate: parsed.data.issueDate || new Date().toISOString().split('T')[0] })
-  revalidatePath('/accounting')
+  revalidatePath(`/sites/${parsed.data.siteId}/accounting`)
   return { success: true, id }
 }
 
