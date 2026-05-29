@@ -99,6 +99,22 @@ export async function getCashbookEntries(cashbookId: string) {
     .orderBy(desc(cashbookEntries.date))
 }
 
+export async function getAllEntriesBySite(siteId: string, filters?: {
+  category?: string
+  dateFrom?: string
+  dateTo?: string
+  type?: string
+}) {
+  const session = await requireSession()
+  if (!session) return []
+  let query = db.select().from(cashbookEntries).where(eq(cashbookEntries.siteId, siteId))
+  if (filters?.category) query = query.where(eq(cashbookEntries.category, filters.category))
+  if (filters?.type) query = query.where(eq(cashbookEntries.type, filters.type))
+  if (filters?.dateFrom) query = query.where(gte(cashbookEntries.date, filters.dateFrom))
+  if (filters?.dateTo) query = query.where(lte(cashbookEntries.date, filters.dateTo))
+  return query.orderBy(desc(cashbookEntries.date))
+}
+
 export async function deleteCashbookEntry(id: string, siteId: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
