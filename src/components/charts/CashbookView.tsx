@@ -8,6 +8,7 @@ import {
   getCustomFields, createCustomField, updateCustomField, deleteCustomField,
   getCustomPaymentMethods, createCustomPaymentMethod, deleteCustomPaymentMethod,
   getCashbookAccessList, createCashbookAccess, deleteCashbookAccess,
+  getAllEntriesBySite,
 } from '@/actions/cashbook'
 
 // ── Constants ─────────────────────────────────────────────────
@@ -265,9 +266,9 @@ function EntryDrawer({
 }: {
   open: boolean; onClose: () => void; siteId: string; cashbookId: string; initialData?: any
   customFields: any[]; allPaymentModes: string[]; allCategories: string[]; parties: any[]
-  onPartyAdded: (p: any) => void; onSave: (data: any) => void; onAddPaymentMode: (v: string) => Promise<void>; onAddCategory: (v: string) => Promise<void>
+  onPartyAdded: (p: any) => void; onSave: (data: any, addAnother?: boolean) => void; onAddPaymentMode: (v: string) => Promise<void>; onAddCategory: (v: string) => Promise<void>
 }) {
-  const [entryType, setEntryType]     = useState(initialData?.type ?? 'OUT')
+  const [entryType, setEntryType]     = useState(initialData?.type ?? 'IN')
   const [partyName, setPartyName]     = useState(initialData?.partyName ?? '')
   const [proofUrl, setProofUrl]       = useState(initialData?.proofUrl ?? '')
   const [category, setCategory]       = useState(initialData?.category ?? '')
@@ -303,16 +304,16 @@ function EntryDrawer({
     const fd = new FormData(e.currentTarget)
     const data: any = Object.fromEntries(fd)
     data.type = entryType
-    data.partyName  = partyName  || null
-    data.proofUrl   = proofUrl   || null
-    data.category   = category   || null
+    data.partyName   = partyName  || null
+    data.proofUrl    = proofUrl   || null
+    data.category    = category   || null
     data.paymentMode = paymentMode || null
-    // Store custom field values as JSON
     if (Object.keys(customValues).length > 0) {
       data.customFieldValues = customValues
     }
+    const addAnother = !!(e as any).addAnother
     setLoading(true); setError('')
-    Promise.resolve(onSave(data)).finally(() => setLoading(false))
+    Promise.resolve(onSave(data, addAnother)).finally(() => setLoading(false))
   }
 
   const typeInfo = ENTRY_TYPES.find(t => t.value === entryType)!
@@ -423,11 +424,18 @@ function EntryDrawer({
             </div>
           )}
 
-          <div className="flex gap-3 pt-4 pb-2">
-            <button type="button" onClick={onClose} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">Cancel</button>
+          <div className="flex gap-2 pt-4 pb-2 flex-wrap">
+            <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">Cancel</button>
+            {!initialData && (
+              <button type="button" disabled={loading}
+                onClick={e => { const form = (e.currentTarget as HTMLElement).closest('form') as HTMLFormElement | null; if (form) { const ev = new Event('submit', {bubbles:true,cancelable:true}); Object.defineProperty(ev,'addAnother',{value:true}); form.dispatchEvent(ev) } }}
+                className="flex-1 py-2.5 rounded-xl border-2 border-blue-400 text-blue-700 font-bold text-sm hover:bg-blue-50 transition-colors disabled:opacity-60">
+                + Save & Add Another
+              </button>
+            )}
             <button type="submit" disabled={loading}
-              className={`flex-1 py-3 rounded-xl text-white font-bold text-sm transition-colors disabled:opacity-60 ${entryType === 'OUT' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}>
-              {loading ? 'Saving...' : initialData ? 'Update' : entryType === 'OUT' ? '+ Cash In' : '+ Cash Out'}
+              className={`flex-1 py-2.5 rounded-xl text-white font-bold text-sm transition-colors disabled:opacity-60 ${entryType === 'OUT' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}>
+              {loading ? 'Saving...' : initialData ? 'Update' : 'Save Entry'}
             </button>
           </div>
         </form>
@@ -553,6 +561,15 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [filterFrom, setFilterFrom]         = useState('')
   const [filterTo, setFilterTo]             = useState('')
 
+  // Cross-book report state
+  const [crossModal, setCrossModal]       = useState(false)
+  const [crossCategory, setCrossCategory] = useState('')
+  const [crossType, setCrossType]         = useState('')
+  const [crossParty, setCrossParty]       = useState('')
+  const [crossDateFrom, setCrossDateFrom] = useState('')
+  const [crossDateTo, setCrossDateTo]     = useState('')
+  const [crossLoading, setCrossLoading]   = useState(false)
+
   const allPaymentModes = [...BASE_PAYMENT_MODES, ...customPMs]
   const allCategories   = [...BASE_CATEGORIES, ...customCats]
 
@@ -600,13 +617,19 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   }
 
   // ── Entry CRUD ───────────────────────────────────────────────
-  async function handleSaveEntry(data: any) {
+  async function handleSaveEntry(data: any, addAnother = false) {
     data.cashbookId = selectedBook; data.siteId = siteId
     const r = drawer.entry
       ? await updateCashbookEntry(drawer.entry.id, data, siteId)
       : await addCashbookEntry(data)
     if (r?.error) { setError(r.error); return }
-    flash(drawer.entry ? 'Updated!' : 'Entry added!'); setDrawer({ open: false })
+    flash(drawer.entry ? 'Updated!' : 'Entry added!')
+    if (addAnother) {
+      // Reset drawer to fresh Add Entry (keep it open)
+      setDrawer({ open: true, entry: undefined })
+    } else {
+      setDrawer({ open: false })
+    }
     if (selectedBook) loadBook(selectedBook)
   }
 
@@ -677,6 +700,34 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
     if (filterTo && e.date > filterTo) return false
     return true
   }), [entries, filterSearch, filterType, filterParty, filterCategory, filterMode, filterFrom, filterTo])
+
+
+  // ── Cross-book report ──────────────────────────────────────
+  async function handleCrossExport(format: 'csv' | 'pdf') {
+    setCrossLoading(true)
+    const result = await getAllEntriesBySite(siteId, {
+      category: crossCategory || undefined,
+      type:     crossType     || undefined,
+      party:    crossParty    || undefined,
+      dateFrom: crossDateFrom || undefined,
+      dateTo:   crossDateTo   || undefined,
+    })
+    const allEntries = result.entries ?? []
+    const income  = result.income  ?? 0
+    const expense = result.expense ?? 0
+    const net     = result.net     ?? 0
+    const parts = [
+      crossCategory ? `Category: ${crossCategory}` : '',
+      crossParty    ? `Party: ${crossParty}`        : '',
+      crossType === 'OUT' ? 'Cash In' : crossType === 'IN' ? 'Cash Out' : '',
+      crossDateFrom || crossDateTo ? `${crossDateFrom||''}–${crossDateTo||''}` : '',
+    ].filter(Boolean)
+    const title = `All Books${parts.length ? ' — ' + parts.join(' · ') : ' — Complete Report'}`
+    if (format === 'csv') exportToCSV(allEntries, title)
+    else exportToPDF(allEntries, title, { income, expense, net })
+    setCrossLoading(false)
+    setCrossModal(false)
+  }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
@@ -757,6 +808,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
             <div className="text-slate-300">|</div>
             <div className="flex items-center gap-1.5"><span className="text-slate-600">Balance:</span><span className={`font-bold ${net >= 0 ? 'text-green-700' : 'text-red-600'}`}>₹{fmtAmt(Math.abs(net))}</span></div>
             <div className="ml-auto flex gap-2">
+              {hasFilters && <span className="text-xs text-slate-400 italic">Filtered</span>}
               <button type="button" onClick={() => exportToCSV(filtered, currentBook?.name ?? 'Cashbook')}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-green-700 hover:border-green-300 text-xs font-semibold transition-colors">
                 ↓ CSV
@@ -764,6 +816,10 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
               <button type="button" onClick={() => exportToPDF(filtered, currentBook?.name ?? 'Cashbook', { income, expense, net })}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 text-xs font-semibold transition-colors">
                 ↓ PDF
+              </button>
+              <button type="button" onClick={() => setCrossModal(true)}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 text-xs font-semibold transition-colors">
+                📊 All Books
               </button>
             </div>
           </div>
@@ -784,6 +840,10 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
               <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterParty} onChange={e => setFilterParty(e.target.value)}>
                 <option value="">All Parties</option>
                 {uniqueParties.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+                <option value="">All Categories</option>
+                {uniqueCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
               </select>
               <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterMode} onChange={e => setFilterMode(e.target.value)}>
                 <option value="">All Modes</option>
@@ -855,6 +915,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                       <td className="px-3 py-3 max-w-[200px]">
                         <div className="text-slate-900 font-semibold text-sm truncate">{e.description || '—'}</div>
                         {e.partyName && <div className="text-slate-500 text-xs mt-0.5">by {e.partyName}</div>}
+                      {e.addedBy && <div className="text-slate-400 text-xs">Added by {e.addedBy}</div>}
                         {e.reference && <div className="text-slate-400 text-xs">{e.reference}</div>}
                       </td>
                       <td className="px-3 py-3">
@@ -887,6 +948,11 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                             className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-600 transition-colors" title="Edit">
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                           </button>
+                          <button type="button"
+                            onClick={() => setDrawer({ open: true, entry: { ...e, id: undefined } })}
+                            className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Duplicate">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                          </button>
                           <button type="button" onClick={() => handleDeleteEntry(e.id)}
                             className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors" title="Delete">
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
@@ -911,6 +977,92 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
             </div>
           )}
         </>
+      )}
+
+
+      {/* ── Cross-Book Report Modal ── */}
+      {crossModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-lg">📊 All Books Report</h3>
+                  <p className="text-slate-500 text-xs mt-0.5">Export entries from all {books.length} cashbooks with filters</p>
+                </div>
+                <button type="button" onClick={() => setCrossModal(false)} className="text-slate-400 hover:text-slate-700 text-xl w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-100">✕</button>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Category</label>
+                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={crossCategory} onChange={e => setCrossCategory(e.target.value)}>
+                    <option value="">All Categories</option>
+                    {[...new Set(entries.map((e: any) => e.category).filter(Boolean))].map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Transaction Type</label>
+                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={crossType} onChange={e => setCrossType(e.target.value)}>
+                    <option value="">All Types</option>
+                    <option value="OUT">Cash In</option>
+                    <option value="IN">Cash Out</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Party</label>
+                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={crossParty} onChange={e => setCrossParty(e.target.value)}>
+                    <option value="">All Parties</option>
+                    {[...new Set(entries.map((e: any) => e.partyName).filter(Boolean))].map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">From Date</label>
+                    <input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={crossDateFrom} onChange={e => setCrossDateFrom(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">To Date</label>
+                    <input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={crossDateTo} onChange={e => setCrossDateTo(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-xs text-slate-600 space-y-1">
+                <p className="font-semibold text-slate-700">Will include:</p>
+                <p>📚 All {books.length} cashbook{books.length !== 1 ? 's' : ''}</p>
+                {crossCategory && <p>📂 Category: <strong>{crossCategory}</strong></p>}
+                {crossParty    && <p>👤 Party: <strong>{crossParty}</strong></p>}
+                {crossType     && <p>💱 Type: <strong>{crossType === 'OUT' ? 'Cash In' : 'Cash Out'}</strong></p>}
+                {(crossDateFrom || crossDateTo) && <p>📅 <strong>{crossDateFrom || '—'}</strong> to <strong>{crossDateTo || '—'}</strong></p>}
+                {!crossCategory && !crossParty && !crossType && !crossDateFrom && !crossDateTo && (
+                  <p className="text-slate-400 italic">All entries from all books</p>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setCrossModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+                <button type="button" onClick={() => handleCrossExport('csv')} disabled={crossLoading}
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-60">
+                  {crossLoading ? '...' : '↓ CSV'}
+                </button>
+                <button type="button" onClick={() => handleCrossExport('pdf')} disabled={crossLoading}
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:opacity-60">
+                  {crossLoading ? '...' : '↓ PDF'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Entry Drawer ── */}

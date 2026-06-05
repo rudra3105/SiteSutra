@@ -63,6 +63,8 @@ export async function addCashbookEntry(data: Record<string, unknown>) {
     partyName:         (data.partyName as string) || null,
     proofUrl:          (data.proofUrl as string) || null,
     customFieldValues: data.customFieldValues ? JSON.stringify(data.customFieldValues) : null,
+    addedBy:   session.name || null,
+    addedById: session.userId || null,
   })
   revalidatePath(`/sites/${data.siteId as string}/accounting`)
   return { success: true, id }
@@ -100,19 +102,28 @@ export async function getCashbookEntries(cashbookId: string) {
 }
 
 export async function getAllEntriesBySite(siteId: string, filters?: {
-  category?: string
-  dateFrom?: string
-  dateTo?: string
-  type?: string
+  category?: string; type?: string; party?: string; dateFrom?: string; dateTo?: string
 }) {
   const session = await requireSession()
-  if (!session) return []
-  let query = db.select().from(cashbookEntries).where(eq(cashbookEntries.siteId, siteId))
-  if (filters?.category) query = query.where(eq(cashbookEntries.category, filters.category))
-  if (filters?.type) query = query.where(eq(cashbookEntries.type, filters.type))
-  if (filters?.dateFrom) query = query.where(gte(cashbookEntries.date, filters.dateFrom))
-  if (filters?.dateTo) query = query.where(lte(cashbookEntries.date, filters.dateTo))
-  return query.orderBy(desc(cashbookEntries.date))
+  if (!session) return { entries: [], income: 0, expense: 0, net: 0 }
+  const { inArray } = await import('drizzle-orm')
+  const books = await db.select().from(cashbooks).where(eq(cashbooks.siteId, siteId))
+  if (!books.length) return { entries: [], income: 0, expense: 0, net: 0 }
+  const bookIds = books.map((b: any) => b.id)
+  const bookMap: Record<string, string> = {}
+  books.forEach((b: any) => { bookMap[b.id] = b.name })
+  let entries: any[] = await db.select().from(cashbookEntries)
+    .where(inArray(cashbookEntries.cashbookId, bookIds))
+    .orderBy(desc(cashbookEntries.date))
+  entries = entries.map((e: any) => ({ ...e, bookName: bookMap[e.cashbookId] ?? '' }))
+  if (filters?.category) entries = entries.filter((e: any) => e.category === filters.category)
+  if (filters?.type)     entries = entries.filter((e: any) => e.type === filters.type)
+  if (filters?.party)    entries = entries.filter((e: any) => e.partyName === filters.party)
+  if (filters?.dateFrom) entries = entries.filter((e: any) => e.date >= filters.dateFrom!)
+  if (filters?.dateTo)   entries = entries.filter((e: any) => e.date <= filters.dateTo!)
+  const income  = entries.filter((e: any) => e.type === 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
+  const expense = entries.filter((e: any) => e.type !== 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
+  return { entries, income, expense, net: income - expense }
 }
 
 export async function deleteCashbookEntry(id: string, siteId: string) {

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { createTeam, addTeamMember, removeTeamMember, deleteTeam, markTeamAttendance } from '@/actions/teams'
-import { createLabour } from '@/actions/labour'
+import { createLabour, deleteLabour } from '@/actions/labour'
 import { markAttendance } from '@/actions/labour'
 
 const TRADES = ['Mason','Helper','Carpenter','Electrician','Plumber','Painter','Tiler','Steel Fixer','Foreman','Supervisor','Driver']
@@ -39,6 +39,13 @@ export function LabourManagementView({ siteId, initialWorkers, initialTeams, tod
   const [teamAttDate, setTeamAttDate]   = useState(new Date().toISOString().split('T')[0])
 
   function flash(msg: string) { setOk(msg); setTimeout(() => setOk(''), 3000) }
+
+  async function handleDeleteWorker(id: string, name: string) {
+    if (!confirm(`Remove worker "${name}" from this site?`)) return
+    await deleteLabour(id, siteId)
+    flash('Worker removed')
+    window.location.reload()
+  }
 
   async function handleAddWorker(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setLoading(true); setError('')
@@ -219,7 +226,12 @@ export function LabourManagementView({ siteId, initialWorkers, initialTeams, tod
                         ) : (
                           <span className="badge badge-gray">Not Marked</span>
                         )}
-                        <span className={`badge ${w.status === 'ACTIVE' ? 'badge-blue' : 'badge-gray'}`}>{w.status}</span>
+                        <button type="button" onClick={() => handleDeleteWorker(w.id, w.name)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors" title="Remove worker">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
                   )

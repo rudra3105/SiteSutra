@@ -146,3 +146,11 @@ export async function syncOfflineAttendance(entries: Array<{ offlineId: string; 
   }
   return { synced }
 }
+export async function deleteLabour(id: string, siteId: string) {
+  'use server'
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+  await db.delete(labour).where(eq(labour.id, id))
+  revalidatePath(`/sites/${siteId}/labour`)
+  return { success: true }
+}

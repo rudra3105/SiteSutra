@@ -98,6 +98,7 @@ async function run() {
       description TEXT, payment_mode TEXT, reference TEXT,
       vendor TEXT, date TEXT NOT NULL, lpo_number TEXT, lpo_status TEXT,
       party_name TEXT, proof_url TEXT, custom_field_values TEXT,
+      added_by TEXT, added_by_id TEXT,
       created_at TEXT DEFAULT (datetime('now')), updated_at TEXT)`,
 
     `CREATE TABLE IF NOT EXISTS parties (
@@ -142,6 +143,16 @@ async function run() {
   for (const sql of tables) {
     await db.execute(sql)
   }
+
+  // Add new columns (safe — ignores if already exists)
+  const migrations = [
+    'ALTER TABLE cashbook_entries ADD COLUMN added_by TEXT',
+    'ALTER TABLE cashbook_entries ADD COLUMN added_by_id TEXT',
+  ]
+  for (const sql of migrations) {
+    await db.execute(sql).catch(() => {}) // ignore if column already exists
+  }
+
   console.log('✅ All tables created')
 
   // ── Seed data ───────────────────────────────────────────────

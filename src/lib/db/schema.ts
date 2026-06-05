@@ -215,6 +215,8 @@ export const cashbookEntries = sqliteTable('cashbook_entries', {
   partyName:        text('party_name'),
   proofUrl:         text('proof_url'),
   customFieldValues: text('custom_field_values'), // JSON
+  addedBy:          text('added_by'),        // name of user who added
+  addedById:        text('added_by_id'),     // id of user who added
   createdAt:        text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt:        text('updated_at'),
 })

@@ -87,3 +87,12 @@ export async function removeSiteAccess(userId: string, siteId: string) {
   revalidatePath(`/sites/${siteId}`)
   return { success: true }
 }
+export async function deleteSite(id: string) {
+  'use server'
+  const session = await requireAdmin()
+  if (!session) return { error: 'Forbidden' }
+  await db.delete(sites).where(eq(sites.id, id))
+  revalidatePath('/sites')
+  revalidatePath('/dashboard')
+  return { success: true }
+}
