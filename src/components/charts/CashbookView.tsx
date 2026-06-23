@@ -592,6 +592,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [filterParty, setFilterParty]       = useState('')
   const [filterCategory, setFilterCategory] = useState('')
   const [filterMode, setFilterMode]         = useState('')
+  const [filterAddedBy, setFilterAddedBy]   = useState('')
   const [filterFrom, setFilterFrom]         = useState('')
   const [filterTo, setFilterTo]             = useState('')
 
@@ -730,10 +731,11 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
     if (filterParty && e.partyName !== filterParty) return false
     if (filterCategory && e.category !== filterCategory) return false
     if (filterMode && e.paymentMode !== filterMode) return false
+    if (filterAddedBy && e.addedBy !== filterAddedBy) return false
     if (filterFrom && e.date < filterFrom) return false
     if (filterTo && e.date > filterTo) return false
     return true
-  }), [entries, filterSearch, filterType, filterParty, filterCategory, filterMode, filterFrom, filterTo])
+  }), [entries, filterSearch, filterType, filterParty, filterCategory, filterMode, filterAddedBy, filterFrom, filterTo])
 
 
   // ── Cross-book report ──────────────────────────────────────
@@ -765,7 +767,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-  const hasFilters = filterSearch || filterType || filterParty || filterCategory || filterMode || filterFrom || filterTo
+  const hasFilters = filterSearch || filterType || filterParty || filterCategory || filterMode || filterAddedBy || filterFrom || filterTo
 
   // Running balance (computed from ALL entries, not just page)
   const balanceMap = useMemo(() => {
@@ -786,6 +788,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const uniqueParties    = [...new Set(entries.map(e => e.partyName).filter(Boolean))]
   const uniqueCategories = [...new Set(entries.map(e => e.category).filter(Boolean))]
   const uniqueModes      = [...new Set(entries.map(e => e.paymentMode).filter(Boolean))]
+  const uniqueAddedBy    = [...new Set(entries.map(e => e.addedBy).filter(Boolean))]
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -883,9 +886,13 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                 <option value="">All Modes</option>
                 {uniqueModes.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
+              <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterAddedBy} onChange={e => setFilterAddedBy(e.target.value)}>
+                <option value="">All Added By</option>
+                {uniqueAddedBy.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
               <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} title="From" />
               <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterTo} onChange={e => setFilterTo(e.target.value)} title="To" />
-              {hasFilters && <button type="button" onClick={() => { setFilterSearch(''); setFilterType(''); setFilterParty(''); setFilterCategory(''); setFilterMode(''); setFilterFrom(''); setFilterTo('') }} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap">Clear</button>}
+              {hasFilters && <button type="button" onClick={() => { setFilterSearch(''); setFilterType(''); setFilterParty(''); setFilterCategory(''); setFilterMode(''); setFilterAddedBy(''); setFilterFrom(''); setFilterTo('') }} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap">Clear</button>}
             </div>
           </div>
 
@@ -1210,29 +1217,6 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                     </div>
                   ))}
                 </div>
-
-                {/* Parties */}
-                <div className="space-y-2 border-t border-slate-100 pt-4">
-                  <h4 className="font-bold text-slate-800 text-sm">Parties ({parties.length})</h4>
-                  {parties.map(p => (
-                    <div key={p.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 border border-slate-200">
-                      <div><span className="text-slate-900 text-sm font-semibold">{p.name}</span>{p.type && <span className="ml-2 text-slate-400 text-xs">{p.type}</span>}</div>
-                      <button type="button" onClick={async () => { if (!confirm(`Remove "${p.name}"?`)) return; await deleteParty(p.id, siteId); setParties(prev => prev.filter(x => x.id !== p.id)); flash('Removed') }} className="text-xs px-2 py-1 rounded bg-red-50 border border-red-200 text-red-600 font-semibold">✕</button>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Payment modes */}
-                <div className="space-y-2 border-t border-slate-100 pt-4">
-                  <h4 className="font-bold text-slate-800 text-sm">Custom Payment Modes</h4>
-                  {customPMs.map((m, i) => (
-                    <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 border border-slate-200">
-                      <span className="text-slate-900 text-sm font-semibold">{m}</span>
-                      <button type="button" onClick={async () => { await deleteCustomPaymentMethod(initialCustomPaymentMethods.find((x:any) => x.name === m)?.id, siteId); setCustomPMs(prev => prev.filter(x => x !== m)); flash('Removed') }} className="text-xs px-2 py-1 rounded bg-red-50 border border-red-200 text-red-600 font-semibold">✕</button>
-                    </div>
-                  ))}
-                  <p className="text-xs text-slate-400 italic">Add new modes from the entry form payment mode dropdown</p>
-                </div>
               </div>
             )}
 
@@ -1257,6 +1241,13 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                   ['Mode', viewEntry.paymentMode],
                   ['Reference', viewEntry.reference],
                   viewEntry.lpoNumber && ['LPO Number', viewEntry.lpoNumber],
+                  viewEntry.addedBy && ['Added By', viewEntry.addedBy],
+                  ...(() => {
+                    const vals = viewEntry.customFieldValues
+                      ? (typeof viewEntry.customFieldValues === 'string' ? JSON.parse(viewEntry.customFieldValues) : viewEntry.customFieldValues)
+                      : {}
+                    return customFields.filter(cf => vals[cf.id]).map(cf => [cf.label, vals[cf.id]])
+                  })(),
                 ].filter(Boolean).map(([k, v]: any) => v ? (
                   <div key={k} className="flex justify-between py-2 border-b border-slate-100 last:border-0">
                     <span className="text-slate-500 text-sm">{k}</span>
