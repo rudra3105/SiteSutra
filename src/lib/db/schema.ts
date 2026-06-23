@@ -203,10 +203,10 @@ export const cashbookEntries = sqliteTable('cashbook_entries', {
   cashbookId:   text('cashbook_id').notNull().references(() => cashbooks.id, { onDelete: 'cascade' }),
   siteId:       text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
   type:         text('type').notNull(), // INCOME | EXPENSE | LPO
-  category:     text('category').notNull(),
+  category:     text('category'),
   amount:       real('amount').notNull(),
   description:  text('description').notNull(),
-  paymentMode:  text('payment_mode').notNull(),
+  paymentMode:  text('payment_mode'),
   reference:    text('reference'),
   vendor:       text('vendor'),
   date:         text('date').notNull(),
