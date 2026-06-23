@@ -12,8 +12,6 @@ import {
 } from '@/actions/cashbook'
 
 // ── Constants ─────────────────────────────────────────────────
-const BASE_PAYMENT_MODES = ['Cash', 'Online', 'Cheque', 'Bank Transfer', 'UPI', 'NEFT', 'RTGS']
-const BASE_CATEGORIES    = ['Sales', 'Purchase', 'Expense', 'Income', 'Labour', 'Materials', 'Transport', 'Rent', 'Fuel', 'Miscellaneous']
 const PARTY_TYPES        = ['Client', 'Supplier', 'Contractor', 'Labour Contractor', 'Transporter', 'Other']
 const FIELD_TYPES        = ['TEXT', 'NUMBER', 'DATE', 'DROPDOWN']
 const ENTRY_TYPES        = [
@@ -32,6 +30,11 @@ function fmtDateTime(dateStr: string) {
   if (isNaN(d.getTime())) return dateStr
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) +
     '\n' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase()
+}
+function partyLabel(name: string | null | undefined, parties: any[]): string {
+  if (!name) return ''
+  const phone = parties.find(p => p.name === name)?.phone
+  return phone ? `${name} (${phone})` : name
 }
 
 // ── Editable Dropdown (search + add new) ─────────────────────
@@ -133,6 +136,7 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
   }, [])
 
   const filtered = parties.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
+  const selectedPhone = parties.find(p => p.name === value)?.phone
 
   async function doAdd() {
     if (!newName.trim()) { setErr('Name required'); return }
@@ -152,7 +156,7 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
     <div className="relative" ref={ref}>
       <button type="button" onClick={() => setOpen(o => !o)}
         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-left text-sm flex items-center justify-between bg-white hover:border-blue-400 focus:outline-none min-h-[38px]">
-        <span className={value ? 'text-slate-900' : 'text-slate-400'}>{value || 'Select party...'}</span>
+        <span className={value ? 'text-slate-900' : 'text-slate-400'}>{value ? `${value}${selectedPhone ? ` (${selectedPhone})` : ''}` : 'Select party...'}</span>
         <svg className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
@@ -169,7 +173,7 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
             {filtered.map(p => (
               <button key={p.id} type="button" onClick={() => { onChange(p.name); setOpen(false); setSearch('') }}
                 className={`w-full px-3 py-2.5 text-left flex items-center justify-between hover:bg-blue-50 transition-colors ${value === p.name ? 'bg-blue-50' : ''}`}>
-                <span className="text-slate-900 text-sm font-semibold">{p.name}</span>
+                <span className="text-slate-900 text-sm font-semibold">{p.name}{p.phone && <span className="text-slate-400 font-normal"> ({p.phone})</span>}</span>
                 {p.type && <span className="text-slate-400 text-xs bg-slate-100 px-2 py-0.5 rounded">{p.type}</span>}
               </button>
             ))}
@@ -212,7 +216,7 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
 }
 
 // ── Proof Upload ──────────────────────────────────────────────
-function ProofUpload({ value, onChange }: { value: string; onChange: (url: string) => void }) {
+function ProofUpload({ value, onChange, onUploadingChange }: { value: string; onChange: (url: string) => void; onUploadingChange?: (uploading: boolean) => void }) {
   const [uploading, setUploading] = useState(false)
   const [err, setErr]             = useState('')
   const [fileName, setFileName]   = useState('')
@@ -220,11 +224,11 @@ function ProofUpload({ value, onChange }: { value: string; onChange: (url: strin
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return
-    setUploading(true); setErr('')
+    setUploading(true); onUploadingChange?.(true); setErr('')
     const fd = new FormData(); fd.append('file', file)
     const res = await fetch('/api/upload', { method: 'POST', body: fd })
     const data = await res.json()
-    setUploading(false)
+    setUploading(false); onUploadingChange?.(false)
     if (!res.ok || data.error) { setErr(data.error ?? 'Upload failed'); return }
     setFileName(file.name); onChange(data.url)
   }
@@ -262,17 +266,17 @@ function ProofUpload({ value, onChange }: { value: string; onChange: (url: strin
 
 // ── Entry Drawer (Add/Edit) ───────────────────────────────────
 function EntryDrawer({
-  open, onClose, siteId, cashbookId, initialData, customFields, allPaymentModes, allCategories, parties, onPartyAdded, onSave, onAddPaymentMode, onAddCategory,
+  open, onClose, siteId, cashbookId, initialData, entryType, customFields, allPaymentModes, allCategories, parties, onPartyAdded, onSave, onAddPaymentMode, onAddCategory,
 }: {
-  open: boolean; onClose: () => void; siteId: string; cashbookId: string; initialData?: any
+  open: boolean; onClose: () => void; siteId: string; cashbookId: string; initialData?: any; entryType: 'IN' | 'OUT'
   customFields: any[]; allPaymentModes: string[]; allCategories: string[]; parties: any[]
   onPartyAdded: (p: any) => void; onSave: (data: any, addAnother?: boolean) => void; onAddPaymentMode: (v: string) => Promise<void>; onAddCategory: (v: string) => Promise<void>
 }) {
-  const [entryType, setEntryType]     = useState(initialData?.type ?? 'IN')
   const [partyName, setPartyName]     = useState(initialData?.partyName ?? '')
   const [proofUrl, setProofUrl]       = useState(initialData?.proofUrl ?? '')
+  const [mediaUploading, setMediaUploading] = useState(false)
   const [category, setCategory]       = useState(initialData?.category ?? '')
-  const [paymentMode, setPaymentMode] = useState(initialData?.paymentMode ?? 'Cash')
+  const [paymentMode, setPaymentMode] = useState(initialData?.paymentMode ?? '')
   const [customValues, setCustomValues] = useState<Record<string, string>>(
     initialData?.customFieldValues
       ? (typeof initialData.customFieldValues === 'string' ? JSON.parse(initialData.customFieldValues) : initialData.customFieldValues)
@@ -283,7 +287,6 @@ function EntryDrawer({
 
   useEffect(() => {
     if (initialData) {
-      setEntryType(initialData.type ?? 'OUT')
       setPartyName(initialData.partyName ?? '')
       setProofUrl(initialData.proofUrl ?? '')
       setCategory(initialData.category ?? '')
@@ -292,7 +295,7 @@ function EntryDrawer({
         ? (typeof initialData.customFieldValues === 'string' ? JSON.parse(initialData.customFieldValues) : initialData.customFieldValues)
         : {})
     } else {
-      setEntryType('OUT'); setPartyName(''); setProofUrl(''); setCategory(''); setPaymentMode('Cash'); setCustomValues({})
+      setPartyName(''); setProofUrl(''); setCategory(''); setPaymentMode(''); setCustomValues({})
     }
     setError('')
   }, [initialData, open])
@@ -323,29 +326,22 @@ function EntryDrawer({
       {/* Overlay */}
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       {/* Drawer */}
-      <div className="relative bg-white w-full max-w-md h-full overflow-y-auto shadow-2xl flex flex-col">
+      <div className="relative bg-white w-full max-w-md h-full overflow-hidden shadow-2xl flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 sticky top-0 bg-white z-10">
-          <h2 className="font-bold text-slate-900 text-base">{initialData ? 'Edit Entry' : 'Add Entry'}</h2>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <h2 className="font-bold text-slate-900 text-base">{initialData ? 'Edit Entry' : 'Add Entry'}</h2>
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${typeInfo.bg} ${typeInfo.color} border-current`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${typeInfo.dot}`} />
+              {typeInfo.label}
+            </span>
+          </div>
           <button type="button" onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors text-lg">✕</button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {error && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">{error}</div>}
-
-          {/* Cash Out / Cash In */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Transaction Type *</label>
-            <div className="grid grid-cols-2 gap-2">
-              {ENTRY_TYPES.map(t => (
-                <button key={t.value} type="button" onClick={() => setEntryType(t.value)}
-                  className={`py-3 rounded-xl text-sm font-bold border-2 transition-all text-center ${entryType === t.value ? `${t.bg} ${t.color} border-current` : 'bg-white border-slate-200 text-slate-600 hover:border-slate-400'}`}>
-                  <div className={`w-2 h-2 rounded-full mx-auto mb-1 ${t.dot}`} />
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {/* Amount */}
           <div>
@@ -396,7 +392,7 @@ function EntryDrawer({
           </div>
 
           {/* Bill/Proof */}
-          <ProofUpload value={proofUrl} onChange={setProofUrl} />
+          <ProofUpload value={proofUrl} onChange={setProofUrl} onUploadingChange={setMediaUploading} />
 
           {/* Custom Fields — rendered and saved properly */}
           {customFields.length > 0 && (
@@ -423,19 +419,20 @@ function EntryDrawer({
               })}
             </div>
           )}
+        </div>
 
-          <div className="flex gap-2 pt-4 pb-2 flex-wrap">
+          <div className="flex gap-2 p-4 border-t border-slate-200 bg-white flex-shrink-0 flex-wrap">
             <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">Cancel</button>
             {!initialData && (
-              <button type="button" disabled={loading}
+              <button type="button" disabled={loading || mediaUploading}
                 onClick={e => { const form = (e.currentTarget as HTMLElement).closest('form') as HTMLFormElement | null; if (form) { const ev = new Event('submit', {bubbles:true,cancelable:true}); Object.defineProperty(ev,'addAnother',{value:true}); form.dispatchEvent(ev) } }}
                 className="flex-1 py-2.5 rounded-xl border-2 border-blue-400 text-blue-700 font-bold text-sm hover:bg-blue-50 transition-colors disabled:opacity-60">
                 + Save & Add Another
               </button>
             )}
-            <button type="submit" disabled={loading}
+            <button type="submit" disabled={loading || mediaUploading}
               className={`flex-1 py-2.5 rounded-xl text-white font-bold text-sm transition-colors disabled:opacity-60 ${entryType === 'OUT' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}>
-              {loading ? 'Saving...' : initialData ? 'Update' : 'Save Entry'}
+              {loading ? 'Saving...' : mediaUploading ? 'Uploading...' : initialData ? 'Update' : 'Save Entry'}
             </button>
           </div>
         </form>
@@ -445,29 +442,66 @@ function EntryDrawer({
 }
 
 // ── Export helpers ────────────────────────────────────────────
-function exportToCSV(entries: any[], bookName: string) {
-  const headers = ['Date & Time', 'Details', 'Party', 'Category', 'Mode', 'Bill', 'Amount (₹)', 'Balance (₹)']
-  let balance = 0
-  const rows = [...entries].reverse().map(e => {
-    const amt = e.type === 'OUT' ? e.amount : -e.amount
-    balance += amt
-    return [e.date, e.description ?? '', e.partyName ?? '', e.category ?? '', e.paymentMode ?? '', e.proofUrl ? 'Yes' : '', e.amount.toFixed(2), balance.toFixed(2)]
+async function exportToExcel(entries: any[], bookName: string, parties: any[] = []) {
+  const ExcelJS = (await import('exceljs')).default
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet('Cashbook')
+
+  sheet.columns = [
+    { header: 'Date & Time', key: 'date',     width: 18 },
+    { header: 'Details',     key: 'details',  width: 30 },
+    { header: 'Party',       key: 'party',    width: 18 },
+    { header: 'Category',    key: 'category', width: 16 },
+    { header: 'Mode',        key: 'mode',     width: 14 },
+    { header: 'Bill',        key: 'bill',     width: 8  },
+    { header: 'Type',        key: 'type',     width: 12 },
+    { header: 'Amount (₹)',  key: 'amount',   width: 16 },
+    { header: 'Balance (₹)', key: 'balance',  width: 16 },
+  ]
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
+  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }
+
+  const GREEN = { argb: 'FF16A34A' }
+  const RED   = { argb: 'FFDC2626' }
+
+  let balance2 = 0
+  ;[...entries].reverse().forEach(e => {
+    const isOut = e.type === 'OUT'
+    balance2 += isOut ? e.amount : -e.amount
+    const row = sheet.addRow({
+      date:     e.date ?? '',
+      details:  e.description ?? '',
+      party:    partyLabel(e.partyName, parties),
+      category: e.category ?? '',
+      mode:     e.paymentMode ?? '',
+      bill:     e.proofUrl ? 'Yes' : '',
+      type:     isOut ? 'Cash In' : 'Cash Out',
+      amount:   isOut ? e.amount : -e.amount,
+      balance:  balance2,
+    })
+    const color = isOut ? GREEN : RED
+    row.getCell('type').font    = { bold: true, color }
+    row.getCell('amount').font  = { bold: true, color }
+    row.getCell('balance').font = { color: balance2 >= 0 ? GREEN : RED }
   })
-  const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+  sheet.getColumn('amount').numFmt  = '#,##0.00'
+  sheet.getColumn('balance').numFmt = '#,##0.00'
+
+  const buffer = await workbook.xlsx.writeBuffer()
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
-  const a   = document.createElement('a'); a.href = url; a.download = `${bookName}.csv`
+  const a   = document.createElement('a'); a.href = url; a.download = `${bookName}.xlsx`
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-function exportToPDF(entries: any[], bookName: string, summary: any) {
+function exportToPDF(entries: any[], bookName: string, summary: any, parties: any[] = []) {
   let balance = 0
   const tableRows = [...entries].reverse().map(e => {
     const amt = e.type === 'OUT' ? e.amount : -e.amount; balance += amt
     const isOut = e.type === 'OUT'
     return `<tr>
       <td style="white-space:pre-line">${e.date ? new Date(e.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) + '\n' + new Date(e.date).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}).toUpperCase() : ''}</td>
-      <td><strong>${e.description ?? ''}</strong>${e.partyName ? `<br><span style="color:#64748b;font-size:10px">${e.partyName}</span>` : ''}</td>
+      <td><strong>${e.description ?? ''}</strong>${e.partyName ? `<br><span style="color:#64748b;font-size:10px">${partyLabel(e.partyName, parties)}</span>` : ''}</td>
       <td>${e.category ?? ''}</td>
       <td>${e.paymentMode ?? ''}</td>
       <td style="text-align:center">${e.proofUrl ? '✓' : ''}</td>
@@ -538,7 +572,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const initialLoadRef = useRef(false)
 
   // Modals/drawers
-  const [drawer, setDrawer]     = useState<{ open: boolean; entry?: any }>({ open: false })
+  const [drawer, setDrawer]     = useState<{ open: boolean; entry?: any; type?: 'IN' | 'OUT' }>({ open: false })
   const [modal, setModal]       = useState<string | null>(null) // 'newBook'|'editBook'|'settings'|'access'|'view'
   const [viewEntry, setViewEntry] = useState<any>(null)
   const [editingBook, setEditingBook] = useState<any>(null)
@@ -570,8 +604,8 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [crossDateTo, setCrossDateTo]     = useState('')
   const [crossLoading, setCrossLoading]   = useState(false)
 
-  const allPaymentModes = [...BASE_PAYMENT_MODES, ...customPMs]
-  const allCategories   = [...BASE_CATEGORIES, ...customCats]
+  const allPaymentModes = customPMs
+  const allCategories   = customCats
 
   function flash(msg: string) { setOk(msg); setTimeout(() => setOk(''), 3000) }
 
@@ -625,8 +659,8 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
     if (r?.error) { setError(r.error); return }
     flash(drawer.entry ? 'Updated!' : 'Entry added!')
     if (addAnother) {
-      // Reset drawer to fresh Add Entry (keep it open)
-      setDrawer({ open: true, entry: undefined })
+      // Reset drawer to fresh Add Entry (keep it open, same transaction type)
+      setDrawer(d => ({ open: true, entry: undefined, type: d.type }))
     } else {
       setDrawer({ open: false })
     }
@@ -703,7 +737,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
 
 
   // ── Cross-book report ──────────────────────────────────────
-  async function handleCrossExport(format: 'csv' | 'pdf') {
+  async function handleCrossExport(format: 'excel' | 'pdf') {
     setCrossLoading(true)
     const result = await getAllEntriesBySite(siteId, {
       category: crossCategory || undefined,
@@ -723,8 +757,8 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
       crossDateFrom || crossDateTo ? `${crossDateFrom||''}–${crossDateTo||''}` : '',
     ].filter(Boolean)
     const title = `All Books${parts.length ? ' — ' + parts.join(' · ') : ' — Complete Report'}`
-    if (format === 'csv') exportToCSV(allEntries, title)
-    else exportToPDF(allEntries, title, { income, expense, net })
+    if (format === 'excel') await exportToExcel(allEntries, title, parties)
+    else exportToPDF(allEntries, title, { income, expense, net }, parties)
     setCrossLoading(false)
     setCrossModal(false)
   }
@@ -809,11 +843,11 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
             <div className="flex items-center gap-1.5"><span className="text-slate-600">Balance:</span><span className={`font-bold ${net >= 0 ? 'text-green-700' : 'text-red-600'}`}>₹{fmtAmt(Math.abs(net))}</span></div>
             <div className="ml-auto flex gap-2">
               {hasFilters && <span className="text-xs text-slate-400 italic">Filtered</span>}
-              <button type="button" onClick={() => exportToCSV(filtered, currentBook?.name ?? 'Cashbook')}
+              <button type="button" onClick={() => exportToExcel(filtered, currentBook?.name ?? 'Cashbook', parties)}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-green-700 hover:border-green-300 text-xs font-semibold transition-colors">
-                ↓ CSV
+                ↓ Excel
               </button>
-              <button type="button" onClick={() => exportToPDF(filtered, currentBook?.name ?? 'Cashbook', { income, expense, net })}
+              <button type="button" onClick={() => exportToPDF(filtered, currentBook?.name ?? 'Cashbook', { income, expense, net }, parties)}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 text-xs font-semibold transition-colors">
                 ↓ PDF
               </button>
@@ -839,7 +873,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
               </select>
               <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterParty} onChange={e => setFilterParty(e.target.value)}>
                 <option value="">All Parties</option>
-                {uniqueParties.map(p => <option key={p} value={p}>{p}</option>)}
+                {uniqueParties.map(p => <option key={p} value={p}>{partyLabel(p, parties)}</option>)}
               </select>
               <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
                 <option value="">All Categories</option>
@@ -865,10 +899,15 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
               {selected.size > 0 && (
                 <button type="button" onClick={deleteSelected} className="px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Delete ({selected.size})</button>
               )}
-              <button type="button" onClick={() => setDrawer({ open: true, entry: undefined })}
-                className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm">
+              <button type="button" onClick={() => setDrawer({ open: true, entry: undefined, type: 'OUT' })}
+                className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 transition-colors shadow-sm">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
-                Add Entry
+                Cash In
+              </button>
+              <button type="button" onClick={() => setDrawer({ open: true, entry: undefined, type: 'IN' })}
+                className="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-bold hover:bg-red-700 transition-colors shadow-sm">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
+                Cash Out
               </button>
             </div>
           </div>
@@ -914,7 +953,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                       </td>
                       <td className="px-3 py-3 max-w-[200px]">
                         <div className="text-slate-900 font-semibold text-sm truncate">{e.description || '—'}</div>
-                        {e.partyName && <div className="text-slate-500 text-xs mt-0.5">by {e.partyName}</div>}
+                        {e.partyName && <div className="text-slate-500 text-xs mt-0.5">by {partyLabel(e.partyName, parties)}</div>}
                       {e.addedBy && <div className="text-slate-400 text-xs">Added by {e.addedBy}</div>}
                         {e.reference && <div className="text-slate-400 text-xs">{e.reference}</div>}
                       </td>
@@ -1019,7 +1058,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                     value={crossParty} onChange={e => setCrossParty(e.target.value)}>
                     <option value="">All Parties</option>
                     {[...new Set(entries.map((e: any) => e.partyName).filter(Boolean))].map(p => (
-                      <option key={p} value={p}>{p}</option>
+                      <option key={p} value={p}>{partyLabel(p, parties)}</option>
                     ))}
                   </select>
                 </div>
@@ -1051,9 +1090,9 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
 
               <div className="flex gap-3">
                 <button type="button" onClick={() => setCrossModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
-                <button type="button" onClick={() => handleCrossExport('csv')} disabled={crossLoading}
+                <button type="button" onClick={() => handleCrossExport('excel')} disabled={crossLoading}
                   className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-60">
-                  {crossLoading ? '...' : '↓ CSV'}
+                  {crossLoading ? '...' : '↓ Excel'}
                 </button>
                 <button type="button" onClick={() => handleCrossExport('pdf')} disabled={crossLoading}
                   className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:opacity-60">
@@ -1072,6 +1111,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
         siteId={siteId}
         cashbookId={selectedBook ?? ''}
         initialData={drawer.entry}
+        entryType={drawer.entry?.type ?? drawer.type ?? 'OUT'}
         customFields={customFields}
         allPaymentModes={allPaymentModes}
         allCategories={allCategories}
@@ -1212,7 +1252,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                 {[
                   ['Date', fmtDateTime(viewEntry.date)],
                   ['Details', viewEntry.description],
-                  ['Party', viewEntry.partyName],
+                  ['Party', partyLabel(viewEntry.partyName, parties)],
                   ['Category', viewEntry.category],
                   ['Mode', viewEntry.paymentMode],
                   ['Reference', viewEntry.reference],
