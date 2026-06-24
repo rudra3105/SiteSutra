@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useContext, useCallback } from 'react'
 import {
   createCashbook, updateCashbook, deleteCashbook,
   addCashbookEntry, updateCashbookEntry, deleteCashbookEntry,
-  createParty, updateParty, deleteParty,
+  getParties, createParty, updateParty, deleteParty,
   getCustomFields, createCustomField, updateCustomField, deleteCustomField,
-  getCustomPaymentMethods, createCustomPaymentMethod, deleteCustomPaymentMethod,
+  getCustomPaymentMethods, createCustomPaymentMethod, renameCustomPaymentMethod, deleteCustomPaymentMethod,
   getCashbookAccessList, createCashbookAccess, deleteCashbookAccess,
-  getAllEntriesBySite,
+  getAllEntriesBySite, renameCategory, deleteCategory,
 } from '@/actions/cashbook'
 
 // ── Constants ─────────────────────────────────────────────────
@@ -24,12 +24,11 @@ const PAGE_SIZE = 50
 function fmtAmt(n: number) {
   return n.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
 }
-function fmtDateTime(dateStr: string) {
+function fmtDate(dateStr: string) {
   if (!dateStr) return ''
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) +
-    '\n' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase()
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 function partyLabel(name: string | null | undefined, parties: any[]): string {
   if (!name) return ''
@@ -37,20 +36,77 @@ function partyLabel(name: string | null | undefined, parties: any[]): string {
   return phone ? `${name} (${phone})` : name
 }
 
-// ── Editable Dropdown (search + add new) ─────────────────────
+// ── Custom Confirm Modal (replaces window.confirm) ─────────────
+type ConfirmOpts = { title?: string; danger?: boolean; confirmLabel?: string; cancelLabel?: string }
+const ConfirmContext = React.createContext<(message: string, opts?: ConfirmOpts) => Promise<boolean>>(
+  async () => true
+)
+function useConfirm() { return useContext(ConfirmContext) }
+
+function ConfirmProvider({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<{ message: string; opts?: ConfirmOpts; resolve: (v: boolean) => void } | null>(null)
+
+  const confirmFn = useCallback((message: string, opts?: ConfirmOpts) => {
+    return new Promise<boolean>(resolve => setState({ message, opts, resolve }))
+  }, [])
+
+  function close(result: boolean) {
+    state?.resolve(result)
+    setState(null)
+  }
+
+  return (
+    <ConfirmContext.Provider value={confirmFn}>
+      {children}
+      {state && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/40" onClick={() => close(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${state.opts?.danger !== false ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zM12 15.75h.008" /></svg>
+              </div>
+              <div className="flex-1 pt-1">
+                <h3 className="font-bold text-slate-900 text-sm">{state.opts?.title ?? 'Are you sure?'}</h3>
+                <p className="text-slate-600 text-sm mt-1">{state.message}</p>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button type="button" onClick={() => close(false)}
+                className="flex-1 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">
+                {state.opts?.cancelLabel ?? 'Cancel'}
+              </button>
+              <button type="button" onClick={() => close(true)} autoFocus
+                className={`flex-1 py-2.5 rounded-lg text-white text-sm font-bold ${state.opts?.danger !== false ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                {state.opts?.confirmLabel ?? 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </ConfirmContext.Provider>
+  )
+}
+
+// ── Editable Dropdown (search + add new + edit/delete options) ─
 function EditableDropdown({
-  options, value, onChange, placeholder = 'Select...', onAddOption,
+  options, value, onChange, placeholder = 'Select...', onAddOption, onEditOption, onDeleteOption,
 }: {
   options: string[]; value: string; onChange: (v: string) => void
   placeholder?: string; onAddOption?: (v: string) => Promise<void>
+  onEditOption?: (oldVal: string, newVal: string) => Promise<void>
+  onDeleteOption?: (val: string) => Promise<void>
 }) {
-  const [open, setOpen]     = useState(false)
-  const [search, setSearch] = useState('')
-  const [adding, setAdding] = useState(false)
+  const [open, setOpen]       = useState(false)
+  const [search, setSearch]   = useState('')
+  const [adding, setAdding]   = useState(false)
+  const [editingOpt, setEditingOpt] = useState<string | null>(null)
+  const [editValue, setEditValue]   = useState('')
+  const [busyOpt, setBusyOpt] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const confirmDialog = useConfirm()
 
   useEffect(() => {
-    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setEditingOpt(null) } }
     document.addEventListener('mousedown', fn)
     return () => document.removeEventListener('mousedown', fn)
   }, [])
@@ -65,6 +121,24 @@ function EditableDropdown({
     onChange(search.trim())
     setSearch(''); setOpen(false)
     setAdding(false)
+  }
+
+  async function handleSaveEdit(oldVal: string) {
+    if (!onEditOption || !editValue.trim() || editValue.trim() === oldVal) { setEditingOpt(null); return }
+    setBusyOpt(oldVal)
+    await onEditOption(oldVal, editValue.trim())
+    if (value === oldVal) onChange(editValue.trim())
+    setBusyOpt(null); setEditingOpt(null)
+  }
+
+  async function handleDelete(o: string) {
+    if (!onDeleteOption) return
+    const ok = await confirmDialog(`Delete "${o}"? This will remove it from all existing entries.`, { confirmLabel: 'Delete' })
+    if (!ok) return
+    setBusyOpt(o)
+    await onDeleteOption(o)
+    if (value === o) onChange('')
+    setBusyOpt(null)
   }
 
   return (
@@ -89,11 +163,42 @@ function EditableDropdown({
                 className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50 italic">— Clear</button>
             )}
             {filtered.length === 0 && !canAdd && <p className="px-3 py-3 text-xs text-slate-400 text-center">No options found</p>}
-            {filtered.map(o => (
-              <button key={o} type="button" onClick={() => { onChange(o); setOpen(false); setSearch('') }}
-                className={`w-full px-3 py-2 text-left text-sm hover:bg-blue-50 transition-colors ${value === o ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-900'}`}>
-                {o}
-              </button>
+            {filtered.map(o => editingOpt === o ? (
+              <div key={o} className="flex items-center gap-1 px-2 py-1.5 bg-blue-50">
+                <input autoFocus className="flex-1 text-sm px-2 py-1 rounded border border-blue-300 bg-white text-slate-900 focus:outline-none"
+                  value={editValue} onChange={e => setEditValue(e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                  onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleSaveEdit(o); if (e.key === 'Escape') setEditingOpt(null) }} />
+                <button type="button" disabled={busyOpt === o} onClick={e => { e.stopPropagation(); handleSaveEdit(o) }}
+                  className="text-xs px-2 py-1 rounded bg-blue-600 text-white font-semibold disabled:opacity-50">✓</button>
+                <button type="button" onClick={e => { e.stopPropagation(); setEditingOpt(null) }}
+                  className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-500">✕</button>
+              </div>
+            ) : (
+              <div key={o} className={`group flex items-center hover:bg-blue-50 transition-colors ${value === o ? 'bg-blue-50' : ''}`}>
+                <button type="button" onClick={() => { onChange(o); setOpen(false); setSearch('') }}
+                  className={`flex-1 text-left px-3 py-2 text-sm truncate ${value === o ? 'text-blue-700 font-semibold' : 'text-slate-900'}`}>
+                  {o}
+                </button>
+                {(onEditOption || onDeleteOption) && (
+                  <div className="flex items-center gap-0.5 pr-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {onEditOption && (
+                      <button type="button" title="Rename" disabled={busyOpt === o}
+                        onClick={e => { e.stopPropagation(); setEditingOpt(o); setEditValue(o) }}
+                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-100">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                      </button>
+                    )}
+                    {onDeleteOption && (
+                      <button type="button" title="Delete" disabled={busyOpt === o}
+                        onClick={e => { e.stopPropagation(); handleDelete(o) }}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-100">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" /></svg>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
           {onAddOption && (
@@ -115,9 +220,10 @@ function EditableDropdown({
 }
 
 // ── Party Selector (same pattern, no nested form) ─────────────
-function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
+function PartySelector({ parties, value, onChange, onPartyAdded, siteId, cashbookId, onEditParty, onDeleteParty }: {
   parties: any[]; value: string; onChange: (v: string) => void
-  onPartyAdded: (p: any) => void; siteId: string
+  onPartyAdded: (p: any) => void; siteId: string; cashbookId: string
+  onEditParty?: (p: any) => Promise<void>; onDeleteParty?: (p: any) => Promise<void>
 }) {
   const [open, setOpen]         = useState(false)
   const [search, setSearch]     = useState('')
@@ -127,10 +233,16 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
   const [newPhone, setNewPhone] = useState('')
   const [adding, setAdding]     = useState(false)
   const [err, setErr]           = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName]   = useState('')
+  const [editType, setEditType]   = useState('')
+  const [editPhone, setEditPhone] = useState('')
+  const [busyId, setBusyId]       = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const confirmDialog = useConfirm()
 
   useEffect(() => {
-    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setShowAdd(false) } }
+    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setShowAdd(false); setEditingId(null) } }
     document.addEventListener('mousedown', fn)
     return () => document.removeEventListener('mousedown', fn)
   }, [])
@@ -142,7 +254,7 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
     if (!newName.trim()) { setErr('Name required'); return }
     setAdding(true); setErr('')
     try {
-      const r = await createParty(siteId, newName.trim(), newType || undefined, newPhone || undefined)
+      const r = await createParty(cashbookId, siteId, newName.trim(), newType || undefined, newPhone || undefined)
       if (!r) { setErr('No response'); setAdding(false); return }
       if (r.error) { setErr(r.error); setAdding(false); return }
       const p = { id: r.id, name: r.name ?? newName.trim(), type: newType, phone: newPhone }
@@ -150,6 +262,24 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
       setNewName(''); setNewType(''); setNewPhone(''); setShowAdd(false); setOpen(false); setSearch('')
     } catch (e: any) { setErr(e?.message ?? 'Error') }
     setAdding(false)
+  }
+
+  async function doSaveEdit(p: any) {
+    if (!onEditParty || !editName.trim()) { setEditingId(null); return }
+    setBusyId(p.id)
+    await onEditParty({ ...p, name: editName.trim(), type: editType, phone: editPhone })
+    if (value === p.name) onChange(editName.trim())
+    setBusyId(null); setEditingId(null)
+  }
+
+  async function doDelete(p: any) {
+    if (!onDeleteParty) return
+    const ok = await confirmDialog(`Delete party "${p.name}"? It will be removed from all existing entries.`, { confirmLabel: 'Delete' })
+    if (!ok) return
+    setBusyId(p.id)
+    await onDeleteParty(p)
+    if (value === p.name) onChange('')
+    setBusyId(null)
   }
 
   return (
@@ -170,12 +300,49 @@ function PartySelector({ parties, value, onChange, onPartyAdded, siteId }: {
           <div className="max-h-44 overflow-y-auto">
             {value && <button type="button" onClick={() => { onChange(''); setOpen(false) }} className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50 italic">— Clear</button>}
             {filtered.length === 0 && !showAdd && <p className="px-3 py-3 text-xs text-slate-400 text-center">{search ? `No match for "${search}"` : 'No parties yet'}</p>}
-            {filtered.map(p => (
-              <button key={p.id} type="button" onClick={() => { onChange(p.name); setOpen(false); setSearch('') }}
-                className={`w-full px-3 py-2.5 text-left flex items-center justify-between hover:bg-blue-50 transition-colors ${value === p.name ? 'bg-blue-50' : ''}`}>
-                <span className="text-slate-900 text-sm font-semibold">{p.name}{p.phone && <span className="text-slate-400 font-normal"> ({p.phone})</span>}</span>
-                {p.type && <span className="text-slate-400 text-xs bg-slate-100 px-2 py-0.5 rounded">{p.type}</span>}
-              </button>
+            {filtered.map(p => editingId === p.id ? (
+              <div key={p.id} className="p-2.5 space-y-1.5 bg-blue-50">
+                <input autoFocus className="w-full text-sm px-2 py-1.5 rounded border border-blue-300 bg-white text-slate-900 focus:outline-none"
+                  value={editName} onChange={e => setEditName(e.target.value)} onClick={e => e.stopPropagation()}
+                  onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') doSaveEdit(p); if (e.key === 'Escape') setEditingId(null) }} placeholder="Party name" />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <select className="text-xs px-2 py-1.5 rounded border border-slate-300 bg-white text-slate-900" value={editType} onChange={e => setEditType(e.target.value)} onClick={e => e.stopPropagation()}>
+                    <option value="">Type</option>
+                    {PARTY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <input className="text-xs px-2 py-1.5 rounded border border-slate-300 bg-white text-slate-900" value={editPhone} onChange={e => setEditPhone(e.target.value)} onClick={e => e.stopPropagation()} placeholder="Phone" />
+                </div>
+                <div className="flex gap-1.5">
+                  <button type="button" onClick={e => { e.stopPropagation(); setEditingId(null) }} className="flex-1 text-xs py-1.5 rounded border border-slate-300 bg-white text-slate-700 font-semibold">Cancel</button>
+                  <button type="button" disabled={busyId === p.id} onClick={e => { e.stopPropagation(); doSaveEdit(p) }} className="flex-1 text-xs py-1.5 rounded bg-blue-600 text-white font-bold disabled:opacity-50">Save</button>
+                </div>
+              </div>
+            ) : (
+              <div key={p.id} className={`group flex items-center hover:bg-blue-50 transition-colors ${value === p.name ? 'bg-blue-50' : ''}`}>
+                <button type="button" onClick={() => { onChange(p.name); setOpen(false); setSearch('') }}
+                  className="flex-1 text-left px-3 py-2.5 flex items-center justify-between min-w-0">
+                  <span className="text-slate-900 text-sm font-semibold truncate">{p.name}{p.phone && <span className="text-slate-400 font-normal"> ({p.phone})</span>}</span>
+                  {p.type && <span className="text-slate-400 text-xs bg-slate-100 px-2 py-0.5 rounded flex-shrink-0 ml-1">{p.type}</span>}
+                </button>
+                {(onEditParty || onDeleteParty) && (
+                  <div className="flex items-center gap-0.5 pr-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                    {onEditParty && (
+                      <button type="button" title="Rename" disabled={busyId === p.id}
+                        onClick={e => { e.stopPropagation(); setEditingId(p.id); setEditName(p.name); setEditType(p.type ?? ''); setEditPhone(p.phone ?? '') }}
+                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-100">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                      </button>
+                    )}
+                    {onDeleteParty && (
+                      <button type="button" title="Delete" disabled={busyId === p.id}
+                        onClick={e => { e.stopPropagation(); doDelete(p) }}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-100">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" /></svg>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
           <div className="border-t border-slate-200">
@@ -266,11 +433,15 @@ function ProofUpload({ value, onChange, onUploadingChange }: { value: string; on
 
 // ── Entry Drawer (Add/Edit) ───────────────────────────────────
 function EntryDrawer({
-  open, onClose, siteId, cashbookId, initialData, entryType, customFields, allPaymentModes, allCategories, parties, onPartyAdded, onSave, onAddPaymentMode, onAddCategory,
+  open, onClose, siteId, cashbookId, initialData, entryType, customFields, allPaymentModes, allCategories, parties, onPartyAdded, onSave,
+  onAddPaymentMode, onAddCategory, onEditPaymentMode, onDeletePaymentMode, onEditCategory, onDeleteCategory, onEditParty, onDeleteParty,
 }: {
   open: boolean; onClose: () => void; siteId: string; cashbookId: string; initialData?: any; entryType: 'IN' | 'OUT'
   customFields: any[]; allPaymentModes: string[]; allCategories: string[]; parties: any[]
   onPartyAdded: (p: any) => void; onSave: (data: any, addAnother?: boolean) => void; onAddPaymentMode: (v: string) => Promise<void>; onAddCategory: (v: string) => Promise<void>
+  onEditPaymentMode: (oldV: string, newV: string) => Promise<void>; onDeletePaymentMode: (v: string) => Promise<void>
+  onEditCategory: (oldV: string, newV: string) => Promise<void>; onDeleteCategory: (v: string) => Promise<void>
+  onEditParty: (p: any) => Promise<void>; onDeleteParty: (p: any) => Promise<void>
 }) {
   const [partyName, setPartyName]     = useState(initialData?.partyName ?? '')
   const [proofUrl, setProofUrl]       = useState(initialData?.proofUrl ?? '')
@@ -351,18 +522,19 @@ function EntryDrawer({
               placeholder="0.00" defaultValue={initialData?.amount ?? ''} />
           </div>
 
-          {/* Date & Time */}
+          {/* Date */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Date *</label>
-            <input name="date" type="datetime-local" required
+            <input name="date" type="date" required
               className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              defaultValue={initialData?.date ? initialData.date.slice(0, 16) : new Date().toISOString().slice(0, 16)} />
+              defaultValue={initialData?.date ? initialData.date.slice(0, 10) : new Date().toISOString().slice(0, 10)} />
           </div>
 
           {/* Party */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Party Name</label>
-            <PartySelector parties={parties} value={partyName} onChange={setPartyName} onPartyAdded={onPartyAdded} siteId={siteId} />
+            <PartySelector parties={parties} value={partyName} onChange={setPartyName} onPartyAdded={onPartyAdded} siteId={siteId} cashbookId={cashbookId}
+              onEditParty={onEditParty} onDeleteParty={onDeleteParty} />
           </div>
 
           {/* Details / Description */}
@@ -375,13 +547,15 @@ function EntryDrawer({
           {/* Category */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Category</label>
-            <EditableDropdown options={allCategories} value={category} onChange={setCategory} placeholder="Select or add category..." onAddOption={onAddCategory} />
+            <EditableDropdown options={allCategories} value={category} onChange={setCategory} placeholder="Select or add category..."
+              onAddOption={onAddCategory} onEditOption={onEditCategory} onDeleteOption={onDeleteCategory} />
           </div>
 
           {/* Payment Mode */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Mode</label>
-            <EditableDropdown options={allPaymentModes} value={paymentMode} onChange={setPaymentMode} placeholder="Select payment mode..." onAddOption={onAddPaymentMode} />
+            <EditableDropdown options={allPaymentModes} value={paymentMode} onChange={setPaymentMode} placeholder="Select payment mode..."
+              onAddOption={onAddPaymentMode} onEditOption={onEditPaymentMode} onDeleteOption={onDeletePaymentMode} />
           </div>
 
           {/* Reference */}
@@ -442,49 +616,131 @@ function EntryDrawer({
 }
 
 // ── Export helpers ────────────────────────────────────────────
-async function exportToExcel(entries: any[], bookName: string, parties: any[] = []) {
+function entryDateRange(entries: any[]) {
+  const dates = entries.map(e => e.date).filter(Boolean).sort()
+  if (!dates.length) return { from: '', to: '' }
+  const fmt = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+  return { from: fmt(dates[0]), to: fmt(dates[dates.length - 1]) }
+}
+function fmtOrDash(n: number | null | undefined) {
+  return n ? fmtAmt(n) : '-'
+}
+
+async function exportToExcel(entries: any[], bookName: string, parties: any[] = [], siteName: string = '') {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('Cashbook')
 
   sheet.columns = [
-    { header: 'Date & Time', key: 'date',     width: 18 },
-    { header: 'Details',     key: 'details',  width: 30 },
-    { header: 'Party',       key: 'party',    width: 18 },
-    { header: 'Category',    key: 'category', width: 16 },
-    { header: 'Mode',        key: 'mode',     width: 14 },
-    { header: 'Bill',        key: 'bill',     width: 8  },
-    { header: 'Type',        key: 'type',     width: 12 },
-    { header: 'Amount (₹)',  key: 'amount',   width: 16 },
-    { header: 'Balance (₹)', key: 'balance',  width: 16 },
+    { key: 'date',     width: 14 },
+    { key: 'name',     width: 18 },
+    { key: 'payment',  width: 12 },
+    { key: 'remark',   width: 28 },
+    { key: 'category', width: 16 },
+    { key: 'income',   width: 16 },
+    { key: 'expense',  width: 16 },
+    { key: 'balance',  width: 16 },
   ]
-  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
-  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }
+  const NCOLS = 8
+  const now = new Date()
+  const generatedAt = `${now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase()}`
+  const { from, to } = entryDateRange(entries)
 
+  const thin = { style: 'thin' as const, color: { argb: 'FFCBD5E1' } }
+  const allBorder = { top: thin, bottom: thin, left: thin, right: thin }
+  function mergeRow(rowIdx: number, value: string, opts: { bold?: boolean; size?: number; italic?: boolean; color?: string } = {}, startCol = 1) {
+    sheet.mergeCells(rowIdx, startCol, rowIdx, NCOLS)
+    const cell = sheet.getCell(rowIdx, startCol)
+    cell.value = value
+    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+    cell.font = { bold: opts.bold ?? false, size: opts.size ?? 10, italic: opts.italic ?? false, color: { argb: opts.color ?? 'FF0F172A' } }
+    for (let c = startCol; c <= NCOLS; c++) sheet.getCell(rowIdx, c).border = allBorder
+    return cell
+  }
+
+  // ── Logo (own merged cell, separate from title text) ──
+  sheet.mergeCells('A1:A3')
+  sheet.getCell('A1').border = allBorder
+  try {
+    const res = await fetch('/logo.png')
+    if (res.ok) {
+      const buf = await res.arrayBuffer()
+      const imageId = workbook.addImage({ buffer: buf as any, extension: 'png' })
+      sheet.addImage(imageId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 46, height: 46 } })
+    }
+  } catch { /* logo optional */ }
+
+  // ── Header block (rows 1-6) ──
+  mergeRow(1, 'Cash Book Report', { bold: true, size: 16 }, 2)
+  mergeRow(2, `Generated on - ${generatedAt}`, { size: 9, color: 'FF64748B' }, 2)
+  mergeRow(3, '', {}, 2)
+  mergeRow(4, siteName ? `${siteName} · ${bookName}` : bookName, { bold: true, size: 12 })
+  mergeRow(5, from && to ? `Report Period: ${from} - ${to}` : '', { size: 9, color: 'FF64748B' })
+  mergeRow(6, '', {})
+  sheet.getRow(1).height = 26
+
+  // ── Income / Expense / Total summary (3-col mini table) ──
+  const income  = entries.filter((e: any) => e.type === 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
+  const expense = entries.filter((e: any) => e.type !== 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
+  const summaryHeaderRow = 7
+  ;['Income', 'Expense', 'Total'].forEach((label, i) => {
+    const cell = sheet.getCell(summaryHeaderRow, i + 1)
+    cell.value = label
+    cell.font = { bold: true }
+    cell.alignment = { horizontal: 'center' }
+    cell.border = allBorder
+  })
   const GREEN = { argb: 'FF16A34A' }
   const RED   = { argb: 'FFDC2626' }
+  const summaryValueRow = summaryHeaderRow + 1
+  const summaryVals: [string | number, any][] = [[income, GREEN], [expense, RED], [income - expense, income - expense >= 0 ? GREEN : RED]]
+  summaryVals.forEach(([val, color], i) => {
+    const cell = sheet.getCell(summaryValueRow, i + 1)
+    cell.value = val
+    cell.numFmt = '#,##0.00'
+    cell.font = { bold: true, color }
+    cell.alignment = { horizontal: 'center' }
+    cell.border = allBorder
+  })
+  for (let c = 4; c <= NCOLS; c++) { sheet.getCell(summaryHeaderRow, c).border = allBorder; sheet.getCell(summaryValueRow, c).border = allBorder }
+
+  mergeRow(summaryValueRow + 1, '', {})
+  mergeRow(summaryValueRow + 2, `Total Transactions: ${entries.length}`, { size: 10 })
+  mergeRow(summaryValueRow + 3, '', {})
+
+  // ── Table header ──
+  const headerRowIdx = summaryValueRow + 4
+  const headerRow = sheet.getRow(headerRowIdx)
+  const headers = ['Date', 'Name', 'Payment', 'Remark', 'Category', 'Income', 'Expense', 'Balance']
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1)
+    cell.value = h
+    cell.font = { bold: true }
+    cell.alignment = { horizontal: 'center' }
+    cell.border = allBorder
+  })
 
   let balance2 = 0
   ;[...entries].reverse().forEach(e => {
     const isOut = e.type === 'OUT'
     balance2 += isOut ? e.amount : -e.amount
     const row = sheet.addRow({
-      date:     e.date ?? '',
-      details:  e.description ?? '',
-      party:    partyLabel(e.partyName, parties),
+      date:     e.date ? new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '',
+      name:     partyLabel(e.partyName, parties),
+      payment:  e.paymentMode ?? '',
+      remark:   e.description ?? '',
       category: e.category ?? '',
-      mode:     e.paymentMode ?? '',
-      bill:     e.proofUrl ? 'Yes' : '',
-      type:     isOut ? 'Cash In' : 'Cash Out',
-      amount:   isOut ? e.amount : -e.amount,
+      income:   isOut ? e.amount : null,
+      expense:  isOut ? null : e.amount,
       balance:  balance2,
     })
-    const color = isOut ? GREEN : RED
-    row.getCell('type').font    = { bold: true, color }
-    row.getCell('amount').font  = { bold: true, color }
-    row.getCell('balance').font = { color: balance2 >= 0 ? GREEN : RED }
+    row.eachCell({ includeEmpty: true }, cell => { cell.border = allBorder; cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true } })
+    row.getCell('income').font  = { bold: true, color: GREEN }
+    row.getCell('expense').font = { bold: true, color: RED }
+    row.getCell('balance').font = { bold: true, color: balance2 >= 0 ? GREEN : RED }
   })
-  sheet.getColumn('amount').numFmt  = '#,##0.00'
+  sheet.getColumn('income').numFmt  = '#,##0.00'
+  sheet.getColumn('expense').numFmt = '#,##0.00'
   sheet.getColumn('balance').numFmt = '#,##0.00'
 
   const buffer = await workbook.xlsx.writeBuffer()
@@ -494,53 +750,70 @@ async function exportToExcel(entries: any[], bookName: string, parties: any[] = 
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-function exportToPDF(entries: any[], bookName: string, summary: any, parties: any[] = []) {
+function exportToPDF(entries: any[], bookName: string, summary: any, parties: any[] = [], siteName: string = '') {
   let balance = 0
+  const logoUrl = `${window.location.origin}/logo.png`
+  const now = new Date()
+  const generatedAt = `${now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase()}`
+  const { from, to } = entryDateRange(entries)
+
   const tableRows = [...entries].reverse().map(e => {
-    const amt = e.type === 'OUT' ? e.amount : -e.amount; balance += amt
     const isOut = e.type === 'OUT'
+    balance += isOut ? e.amount : -e.amount
     return `<tr>
-      <td style="white-space:pre-line">${e.date ? new Date(e.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) + '\n' + new Date(e.date).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}).toUpperCase() : ''}</td>
-      <td><strong>${e.description ?? ''}</strong>${e.partyName ? `<br><span style="color:#64748b;font-size:10px">${partyLabel(e.partyName, parties)}</span>` : ''}</td>
-      <td>${e.category ?? ''}</td>
+      <td>${e.date ? new Date(e.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : ''}</td>
+      <td>${partyLabel(e.partyName, parties)}</td>
       <td>${e.paymentMode ?? ''}</td>
-      <td style="text-align:center">${e.proofUrl ? '✓' : ''}</td>
-      <td style="text-align:right;color:${isOut ? '#16a34a' : '#dc2626'};font-weight:700">${isOut ? '' : '-'}${fmtAmt(e.amount)}</td>
-      <td style="text-align:right;font-weight:600;color:${balance >= 0 ? '#16a34a' : '#dc2626'}">${fmtAmt(balance)}</td>
+      <td>${e.description ?? ''}</td>
+      <td>${e.category ?? ''}</td>
+      <td style="text-align:right;color:#16a34a;font-weight:700">${isOut ? fmtAmt(e.amount) : '-'}</td>
+      <td style="text-align:right;color:#dc2626;font-weight:700">${isOut ? '-' : fmtAmt(e.amount)}</td>
+      <td style="text-align:right;font-weight:700">${fmtAmt(balance)}</td>
     </tr>`
   }).join('')
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bookName}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;font-size:11px;color:#0f172a;padding:20px}
-  .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0}
-  .title{font-size:18px;font-weight:700;color:#0f172a}
-  .subtitle{font-size:11px;color:#64748b;margin-top:2px}
-  .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
-  .card{padding:10px 14px;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc}
-  .card-label{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:700;margin-bottom:3px}
-  .card-value{font-size:16px;font-weight:700}
+  body{font-family:Arial,sans-serif;font-size:11px;color:#0f172a;padding:24px}
+  .header{display:flex;align-items:center;gap:14px;background:#f8fafc;border-radius:10px;padding:14px 18px;margin-bottom:20px}
+  .logo{width:42px;height:42px;object-fit:contain;border-radius:8px;flex-shrink:0;background:#fff}
+  .title{font-size:17px;font-weight:700;color:#0f172a}
+  .subtitle{font-size:10px;color:#64748b;margin-top:2px}
+  .book{font-size:15px;font-weight:700;color:#0f172a;margin-bottom:2px}
+  .period{font-size:11px;color:#475569;margin-bottom:16px}
+  .summary{width:100%;border-collapse:collapse;margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden}
+  .summary th{background:#f1f5f9;padding:8px 10px;text-align:center;font-size:11px;font-weight:700;color:#334155;border:1px solid #e2e8f0}
+  .summary td{padding:10px;text-align:center;font-size:14px;font-weight:700;border:1px solid #e2e8f0}
   .green{color:#16a34a}.red{color:#dc2626}
-  table{width:100%;border-collapse:collapse;font-size:10px}
-  thead tr{background:#1e293b;color:white}
-  th{padding:7px 8px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
-  td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
-  tr:nth-child(even) td{background:#f8fafc}
+  .txn-count{font-size:11px;color:#334155;font-weight:600;margin-bottom:10px}
+  table.data{width:100%;border-collapse:collapse;font-size:10px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden}
+  table.data thead tr{background:#f1f5f9}
+  table.data th{padding:8px;text-align:center;font-size:9.5px;text-transform:none;font-weight:700;color:#334155;border:1px solid #e2e8f0}
+  table.data td{padding:7px 8px;text-align:center;border:1px solid #e2e8f0;vertical-align:middle}
   .footer{margin-top:20px;font-size:9px;color:#94a3b8;text-align:center;padding-top:8px;border-top:1px solid #e2e8f0}
   @media print{body{padding:0}@page{margin:12mm;size:A4}}
 </style></head><body>
 <div class="header">
-  <div><div class="title">${bookName}</div><div class="subtitle">Cashbook Report · Generated ${new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'})}</div></div>
-  <div style="font-size:11px;color:#64748b;text-align:right">${entries.length} transactions</div>
+  <img class="logo" src="${logoUrl}" onerror="this.style.display='none'" />
+  <div>
+    <div class="title">Cash Book Report</div>
+    <div class="subtitle">Generated on ${generatedAt}</div>
+  </div>
 </div>
-<div class="summary">
-  <div class="card"><div class="card-label">Cash In</div><div class="card-value green">₹${fmtAmt(summary.income)}</div></div>
-  <div class="card"><div class="card-label">Cash Out</div><div class="card-value red">₹${fmtAmt(summary.expense)}</div></div>
-  <div class="card"><div class="card-label">Net Balance</div><div class="card-value ${summary.net >= 0 ? 'green' : 'red'}">₹${fmtAmt(Math.abs(summary.net))}</div></div>
-</div>
-<table>
-  <thead><tr><th>Date & Time</th><th>Details</th><th>Category</th><th>Mode</th><th>Bill</th><th style="text-align:right">Amount (₹)</th><th style="text-align:right">Balance (₹)</th></tr></thead>
+<div class="book">${siteName ? `${siteName} · ${bookName}` : bookName}</div>
+${from && to ? `<div class="period">Report Period: ${from} to ${to}</div>` : ''}
+<table class="summary">
+  <thead><tr><th>Income</th><th>Expense</th><th>Balance</th></tr></thead>
+  <tbody><tr>
+    <td class="green">${fmtAmt(summary.income)}</td>
+    <td class="red">${fmtAmt(summary.expense)}</td>
+    <td>${fmtAmt(summary.net)}</td>
+  </tr></tbody>
+</table>
+<div class="txn-count">Total Transactions: ${entries.length}</div>
+<table class="data">
+  <thead><tr><th>Date</th><th>Name</th><th>Payment</th><th>Remark</th><th>Category</th><th>Income</th><th>Expense</th><th>Balance</th></tr></thead>
   <tbody>${tableRows}</tbody>
 </table>
 <div class="footer">SiteSutra · Developed by Webrise Global (webriseglobal.com)</div>
@@ -554,12 +827,18 @@ function exportToPDF(entries: any[], bookName: string, summary: any, parties: an
 }
 
 // ── Main CashbookView ─────────────────────────────────────────
-export function CashbookView({ siteId, initialBooks, initialParties, initialCustomPaymentMethods }: {
-  siteId: string; initialBooks: any[]; initialParties: any[]; initialCustomPaymentMethods: any[]
+export function CashbookView(props: {
+  siteId: string; siteName?: string; initialBooks: any[]; initialParties: any[]; initialCustomPaymentMethods: any[]
+}) {
+  return <ConfirmProvider><CashbookViewInner {...props} /></ConfirmProvider>
+}
+
+function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties, initialCustomPaymentMethods }: {
+  siteId: string; siteName?: string; initialBooks: any[]; initialParties: any[]; initialCustomPaymentMethods: any[]
 }) {
   const [books, setBooks]                 = useState(initialBooks)
   const [parties, setParties]             = useState(initialParties)
-  const [customPMs, setCustomPMs]         = useState(initialCustomPaymentMethods.map((m: any) => m.name))
+  const [customPMs, setCustomPMs]         = useState<{ id: string; name: string }[]>(initialCustomPaymentMethods)
   const [customCats, setCustomCats]       = useState<string[]>([])
   const [selectedBook, setSelectedBook]   = useState<string | null>(initialBooks[0]?.id ?? null)
   const [entries, setEntries]             = useState<any[]>([])
@@ -570,6 +849,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [loading, setLoading]             = useState(false)
   const [ok, setOk]                       = useState('')
   const initialLoadRef = useRef(false)
+  const confirmDialog = useConfirm()
 
   // Modals/drawers
   const [drawer, setDrawer]     = useState<{ open: boolean; entry?: any; type?: 'IN' | 'OUT' }>({ open: false })
@@ -605,19 +885,21 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   const [crossDateTo, setCrossDateTo]     = useState('')
   const [crossLoading, setCrossLoading]   = useState(false)
 
-  const allPaymentModes = customPMs
-  const allCategories   = customCats
+  const allPaymentModes = [...new Set([...customPMs.map(m => m.name), ...entries.map((e: any) => e.paymentMode).filter(Boolean)])]
+  const allCategories   = [...new Set([...customCats, ...entries.map((e: any) => e.category).filter(Boolean)])]
 
   function flash(msg: string) { setOk(msg); setTimeout(() => setOk(''), 3000) }
 
   async function loadBook(bookId: string) {
-    setSelectedBook(bookId); setEntries([]); setPage(1); setSelected(new Set())
-    const [entriesRes, fields] = await Promise.all([
+    setSelectedBook(bookId); setEntries([]); setPage(1); setSelected(new Set()); setParties([])
+    const [entriesRes, fields, bookParties] = await Promise.all([
       fetch(`/api/cashbook/${bookId}/entries`).then(r => r.json()),
       getCustomFields(bookId),
+      getParties(bookId),
     ])
     setEntries(entriesRes.entries ?? [])
     setCustomFields(fields ?? [])
+    setParties(bookParties ?? [])
   }
 
   useEffect(() => {
@@ -647,7 +929,9 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   }
 
   async function handleDeleteBook() {
-    if (!selectedBook || !confirm(`Delete "${editingBook?.name}" and ALL entries?`)) return
+    if (!selectedBook) return
+    const ok = await confirmDialog(`Delete "${editingBook?.name}" and ALL entries? This cannot be undone.`, { confirmLabel: 'Delete Book' })
+    if (!ok) return
     await deleteCashbook(selectedBook, siteId); flash('Deleted'); window.location.reload()
   }
 
@@ -669,7 +953,8 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   }
 
   async function handleDeleteEntry(id: string) {
-    if (!confirm('Delete this entry?')) return
+    const ok = await confirmDialog('Delete this entry?', { confirmLabel: 'Delete' })
+    if (!ok) return
     await deleteCashbookEntry(id, siteId)
     setEntries(prev => prev.filter(e => e.id !== id))
     setSelected(prev => { const n = new Set(prev); n.delete(id); return n })
@@ -677,7 +962,8 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   }
 
   async function deleteSelected() {
-    if (!confirm(`Delete ${selected.size} entries?`)) return
+    const ok = await confirmDialog(`Delete ${selected.size} entries?`, { confirmLabel: 'Delete' })
+    if (!ok) return
     for (const id of selected) await deleteCashbookEntry(id, siteId)
     setEntries(prev => prev.filter(e => !selected.has(e.id)))
     setSelected(new Set()); flash(`${selected.size} entries deleted`)
@@ -697,20 +983,70 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
   }
 
   async function deleteCustomFieldItem(id: string) {
-    if (!confirm('Delete this field?')) return
+    const ok = await confirmDialog('Delete this field?', { confirmLabel: 'Delete' })
+    if (!ok) return
     await deleteCustomField(id, siteId)
     setCustomFields(prev => prev.filter(f => f.id !== id))
     flash('Field deleted')
   }
 
-  // ── Payment mode + category add ───────────────────────────────
+  // ── Payment mode + category add/edit/delete ────────────────────
   async function handleAddPaymentMode(name: string) {
     const r = await createCustomPaymentMethod(siteId, name)
-    if (r?.success) setCustomPMs(prev => [...prev, name])
+    if (r?.success) setCustomPMs(prev => [...prev, { id: r.id, name: r.name ?? name }])
+  }
+  async function handleEditPaymentMode(oldName: string, newName: string) {
+    const pm = customPMs.find(m => m.name === oldName)
+    if (!pm) return
+    const r = await renameCustomPaymentMethod(pm.id, newName, siteId)
+    if (r?.success) {
+      setCustomPMs(prev => prev.map(m => m.id === pm.id ? { ...m, name: newName } : m))
+      setEntries(prev => prev.map(e => e.paymentMode === oldName ? { ...e, paymentMode: newName } : e))
+    }
+  }
+  async function handleDeletePaymentMode(name: string) {
+    const pm = customPMs.find(m => m.name === name)
+    if (!pm) return
+    const r = await deleteCustomPaymentMethod(pm.id, siteId)
+    if (r?.success) {
+      setCustomPMs(prev => prev.filter(m => m.id !== pm.id))
+      setEntries(prev => prev.map(e => e.paymentMode === name ? { ...e, paymentMode: null } : e))
+    }
   }
   async function handleAddCategory(name: string) {
     setCustomCats(prev => [...prev, name])
     // Categories are saved per-entry, no separate table needed
+  }
+  async function handleEditCategory(oldName: string, newName: string) {
+    if (!selectedBook) return
+    const r = await renameCategory(selectedBook, oldName, newName, siteId)
+    if (r?.success) {
+      setCustomCats(prev => prev.map(c => c === oldName ? newName : c))
+      setEntries(prev => prev.map(e => e.category === oldName ? { ...e, category: newName } : e))
+    }
+  }
+  async function handleDeleteCategory(name: string) {
+    if (!selectedBook) return
+    const r = await deleteCategory(selectedBook, name, siteId)
+    if (r?.success) {
+      setCustomCats(prev => prev.filter(c => c !== name))
+      setEntries(prev => prev.map(e => e.category === name ? { ...e, category: null } : e))
+    }
+  }
+  async function handleEditParty(p: any) {
+    const r = await updateParty(p.id, p.name, p.type, p.phone, siteId)
+    if (r?.success) {
+      const old = parties.find(x => x.id === p.id)
+      setParties(prev => prev.map(x => x.id === p.id ? { ...x, name: p.name, type: p.type || null, phone: p.phone || null } : x))
+      if (old && old.name !== p.name) setEntries(prev => prev.map(e => e.partyName === old.name ? { ...e, partyName: p.name } : e))
+    }
+  }
+  async function handleDeleteParty(p: any) {
+    const r = await deleteParty(p.id, siteId)
+    if (r?.success) {
+      setParties(prev => prev.filter(x => x.id !== p.id))
+      setEntries(prev => prev.map(e => e.partyName === p.name ? { ...e, partyName: null } : e))
+    }
   }
 
   // ── Access ────────────────────────────────────────────────────
@@ -759,8 +1095,8 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
       crossDateFrom || crossDateTo ? `${crossDateFrom||''}–${crossDateTo||''}` : '',
     ].filter(Boolean)
     const title = `All Books${parts.length ? ' — ' + parts.join(' · ') : ' — Complete Report'}`
-    if (format === 'excel') await exportToExcel(allEntries, title, parties)
-    else exportToPDF(allEntries, title, { income, expense, net }, parties)
+    if (format === 'excel') await exportToExcel(allEntries, title, parties, siteName)
+    else exportToPDF(allEntries, title, { income, expense, net }, parties, siteName)
     setCrossLoading(false)
     setCrossModal(false)
   }
@@ -846,11 +1182,11 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
             <div className="flex items-center gap-1.5"><span className="text-slate-600">Balance:</span><span className={`font-bold ${net >= 0 ? 'text-green-700' : 'text-red-600'}`}>₹{fmtAmt(Math.abs(net))}</span></div>
             <div className="ml-auto flex gap-2">
               {hasFilters && <span className="text-xs text-slate-400 italic">Filtered</span>}
-              <button type="button" onClick={() => exportToExcel(filtered, currentBook?.name ?? 'Cashbook', parties)}
+              <button type="button" onClick={() => exportToExcel(filtered, currentBook?.name ?? 'Cashbook', parties, siteName)}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-green-700 hover:border-green-300 text-xs font-semibold transition-colors">
                 ↓ Excel
               </button>
-              <button type="button" onClick={() => exportToPDF(filtered, currentBook?.name ?? 'Cashbook', { income, expense, net }, parties)}
+              <button type="button" onClick={() => exportToPDF(filtered, currentBook?.name ?? 'Cashbook', { income, expense, net }, parties, siteName)}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 text-xs font-semibold transition-colors">
                 ↓ PDF
               </button>
@@ -932,7 +1268,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                         else setSelected(prev => { const n = new Set(prev); paginated.forEach(e => n.delete(e.id)); return n })
                       }} />
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Date & Time</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Daate</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Details</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Mode</th>
@@ -956,7 +1292,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                           onChange={ev => setSelected(prev => { const n = new Set(prev); ev.target.checked ? n.add(e.id) : n.delete(e.id); return n })} />
                       </td>
                       <td className="px-3 py-3">
-                        <div className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{fmtDateTime(e.date)}</div>
+                        <div className="text-xs text-slate-700 leading-relaxed">{fmtDate(e.date)}</div>
                       </td>
                       <td className="px-3 py-3 max-w-[200px]">
                         <div className="text-slate-900 font-semibold text-sm truncate">{e.description || '—'}</div>
@@ -1127,6 +1463,12 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
         onSave={handleSaveEntry}
         onAddPaymentMode={handleAddPaymentMode}
         onAddCategory={handleAddCategory}
+        onEditPaymentMode={handleEditPaymentMode}
+        onDeletePaymentMode={handleDeletePaymentMode}
+        onEditCategory={handleEditCategory}
+        onDeleteCategory={handleDeleteCategory}
+        onEditParty={handleEditParty}
+        onDeleteParty={handleDeleteParty}
       />
 
       {/* ── Modals ── */}
@@ -1234,7 +1576,7 @@ export function CashbookView({ siteId, initialBooks, initialParties, initialCust
                   {viewEntry.type === 'OUT' ? '' : '-'}₹{fmtAmt(viewEntry.amount)}
                 </div>
                 {[
-                  ['Date', fmtDateTime(viewEntry.date)],
+                  ['Date', fmtDate(viewEntry.date)],
                   ['Details', viewEntry.description],
                   ['Party', partyLabel(viewEntry.partyName, parties)],
                   ['Category', viewEntry.category],

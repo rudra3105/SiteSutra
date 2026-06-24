@@ -21,6 +21,7 @@ prisma/dev.db
 prisma/dev.db-shm
 prisma/dev.db-wal
 *.db
+backups/
 
 # Drizzle generated migrations (optional - can commit these)
 # drizzle/

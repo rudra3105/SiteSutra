@@ -224,8 +224,9 @@ export const cashbookEntries = sqliteTable('cashbook_entries', {
 
 // ── Parties ───────────────────────────────────────────────────
 export const parties = sqliteTable('parties', {
-  id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
-  siteId:    text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  id:         text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  siteId:     text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  cashbookId: text('cashbook_id').references(() => cashbooks.id, { onDelete: 'cascade' }),
   name:      text('name').notNull(),
   type:      text('type'),        // e.g. Supplier, Contractor, Client, Labour
   phone:     text('phone'),

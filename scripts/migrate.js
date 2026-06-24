@@ -67,6 +67,9 @@ async function run() {
   await client.query(`ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS updated_at TEXT`);
   await client.query(`ALTER TABLE cashbooks ADD COLUMN IF NOT EXISTS updated_at TEXT`);
 
+  // ── Parties become cashbook-specific (v7) ──────────────────
+  await client.query(`ALTER TABLE parties ADD COLUMN IF NOT EXISTS cashbook_id TEXT REFERENCES cashbooks(id) ON DELETE CASCADE`);
+
   console.log('✅ Tables ready')
 
   // ── Seed data ──────────────────────────────────────────────

@@ -13,7 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "postinstall": "echo \"Install complete - run npm run db:setup to initialize database\"",
     "setup": "npm run db:push && npm run db:seed",
-    "db:setup": "node scripts/seed-local.js"
+    "db:setup": "node scripts/seed-local.js",
+    "db:backup": "node scripts/backup-db.js"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3",

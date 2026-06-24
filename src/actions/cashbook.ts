@@ -136,18 +136,18 @@ export async function deleteCashbookEntry(id: string, siteId: string) {
 
 // ── Parties CRUD ──────────────────────────────────────────────
 
-export async function getParties(siteId: string) {
+export async function getParties(cashbookId: string) {
   const session = await requireSession()
   if (!session) return []
-  return db.select().from(parties).where(eq(parties.siteId, siteId)).orderBy(parties.name)
+  return db.select().from(parties).where(eq(parties.cashbookId, cashbookId)).orderBy(parties.name)
 }
 
-export async function createParty(siteId: string, name: string, type?: string, phone?: string) {
+export async function createParty(cashbookId: string, siteId: string, name: string, type?: string, phone?: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
   if (!name?.trim()) return { error: 'Party name is required' }
   const id = crypto.randomUUID()
-  await db.insert(parties).values({ id, siteId, name: name.trim(), type: type?.trim() || null, phone: phone?.trim() || null })
+  await db.insert(parties).values({ id, siteId, cashbookId, name: name.trim(), type: type?.trim() || null, phone: phone?.trim() || null })
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true, id, name: name.trim() }
 }
@@ -155,7 +155,14 @@ export async function createParty(siteId: string, name: string, type?: string, p
 export async function updateParty(id: string, name: string, type: string, phone: string, siteId: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
-  await db.update(parties).set({ name: name.trim(), type: type?.trim() || null, phone: phone?.trim() || null }).where(eq(parties.id, id))
+  const [existing] = await db.select().from(parties).where(eq(parties.id, id))
+  if (!existing) return { error: 'Party not found' }
+  const newName = name.trim()
+  await db.update(parties).set({ name: newName, type: type?.trim() || null, phone: phone?.trim() || null }).where(eq(parties.id, id))
+  if (existing.name !== newName) {
+    await db.update(cashbookEntries).set({ partyName: newName })
+      .where(and(eq(cashbookEntries.cashbookId, existing.cashbookId), eq(cashbookEntries.partyName, existing.name)))
+  }
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
 }
@@ -163,7 +170,32 @@ export async function updateParty(id: string, name: string, type: string, phone:
 export async function deleteParty(id: string, siteId: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
+  const [existing] = await db.select().from(parties).where(eq(parties.id, id))
+  if (!existing) return { error: 'Party not found' }
   await db.delete(parties).where(eq(parties.id, id))
+  await db.update(cashbookEntries).set({ partyName: null })
+    .where(and(eq(cashbookEntries.cashbookId, existing.cashbookId), eq(cashbookEntries.partyName, existing.name)))
+  revalidatePath(`/sites/${siteId}/accounting`)
+  return { success: true }
+}
+
+// ── Categories (plain text on entries, propagate rename/delete) ─
+
+export async function renameCategory(cashbookId: string, oldName: string, newName: string, siteId: string) {
+  const session = await requireAdmin()
+  if (!session) return { error: 'Forbidden' }
+  if (!newName?.trim()) return { error: 'Category name is required' }
+  await db.update(cashbookEntries).set({ category: newName.trim() })
+    .where(and(eq(cashbookEntries.cashbookId, cashbookId), eq(cashbookEntries.category, oldName)))
+  revalidatePath(`/sites/${siteId}/accounting`)
+  return { success: true }
+}
+
+export async function deleteCategory(cashbookId: string, name: string, siteId: string) {
+  const session = await requireAdmin()
+  if (!session) return { error: 'Forbidden' }
+  await db.update(cashbookEntries).set({ category: null })
+    .where(and(eq(cashbookEntries.cashbookId, cashbookId), eq(cashbookEntries.category, name)))
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
 }
@@ -231,10 +263,31 @@ export async function createCustomPaymentMethod(siteId: string, name: string) {
   return { success: true, id, name: name.trim() }
 }
 
+export async function renameCustomPaymentMethod(id: string, newName: string, siteId: string) {
+  const session = await requireAdmin()
+  if (!session) return { error: 'Forbidden' }
+  if (!newName?.trim()) return { error: 'Name required' }
+  const [existing] = await db.select().from(customPaymentMethods).where(eq(customPaymentMethods.id, id))
+  if (!existing) return { error: 'Payment mode not found' }
+  const name = newName.trim()
+  await db.update(customPaymentMethods).set({ name }).where(eq(customPaymentMethods.id, id))
+  if (existing.name !== name) {
+    await db.update(cashbookEntries).set({ paymentMode: name })
+      .where(and(eq(cashbookEntries.siteId, siteId), eq(cashbookEntries.paymentMode, existing.name)))
+  }
+  revalidatePath(`/sites/${siteId}/accounting`)
+  return { success: true, name }
+}
+
 export async function deleteCustomPaymentMethod(id: string, siteId: string) {
   const session = await requireAdmin()
   if (!session) return { error: 'Forbidden' }
+  const [existing] = await db.select().from(customPaymentMethods).where(eq(customPaymentMethods.id, id))
   await db.delete(customPaymentMethods).where(eq(customPaymentMethods.id, id))
+  if (existing) {
+    await db.update(cashbookEntries).set({ paymentMode: null })
+      .where(and(eq(cashbookEntries.siteId, siteId), eq(cashbookEntries.paymentMode, existing.name)))
+  }
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true }
 }
