@@ -14,23 +14,23 @@ import {
 // ── Constants ─────────────────────────────────────────────────
 const PARTY_TYPES        = ['Client', 'Supplier', 'Contractor', 'Labour Contractor', 'Transporter', 'Other']
 const FIELD_TYPES        = ['TEXT', 'NUMBER', 'DATE', 'DROPDOWN']
-const ENTRY_TYPES        = [
+export const ENTRY_TYPES = [
   { value: 'IN',  label: 'Cash Out',     color: 'text-red-600',     bg: 'bg-red-50 border-red-400',     dot: 'bg-red-500'     },
   { value: 'OUT', label: 'Cash In', color: 'text-green-700',   bg: 'bg-green-50 border-green-400', dot: 'bg-green-500'   },
 ]
 const PAGE_SIZE = 50
 
 // ── Helpers ───────────────────────────────────────────────────
-function fmtAmt(n: number) {
+export function fmtAmt(n: number) {
   return n.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
 }
-function fmtDate(dateStr: string) {
+export function fmtDate(dateStr: string) {
   if (!dateStr) return ''
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
-function partyLabel(name: string | null | undefined, parties: any[]): string {
+export function partyLabel(name: string | null | undefined, parties: any[]): string {
   if (!name) return ''
   const phone = parties.find(p => p.name === name)?.phone
   return phone ? `${name} (${phone})` : name
@@ -41,9 +41,9 @@ type ConfirmOpts = { title?: string; danger?: boolean; confirmLabel?: string; ca
 const ConfirmContext = React.createContext<(message: string, opts?: ConfirmOpts) => Promise<boolean>>(
   async () => true
 )
-function useConfirm() { return useContext(ConfirmContext) }
+export function useConfirm() { return useContext(ConfirmContext) }
 
-function ConfirmProvider({ children }: { children: React.ReactNode }) {
+export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<{ message: string; opts?: ConfirmOpts; resolve: (v: boolean) => void } | null>(null)
 
   const confirmFn = useCallback((message: string, opts?: ConfirmOpts) => {
@@ -220,7 +220,7 @@ function EditableDropdown({
 }
 
 // ── Party Selector (same pattern, no nested form) ─────────────
-function PartySelector({ parties, value, onChange, onPartyAdded, siteId, cashbookId, onEditParty, onDeleteParty }: {
+export function PartySelector({ parties, value, onChange, onPartyAdded, siteId, cashbookId, onEditParty, onDeleteParty }: {
   parties: any[]; value: string; onChange: (v: string) => void
   onPartyAdded: (p: any) => void; siteId: string; cashbookId: string
   onEditParty?: (p: any) => Promise<void>; onDeleteParty?: (p: any) => Promise<void>
@@ -432,16 +432,16 @@ function ProofUpload({ value, onChange, onUploadingChange }: { value: string; on
 }
 
 // ── Entry Drawer (Add/Edit) ───────────────────────────────────
-function EntryDrawer({
+export function EntryDrawer({
   open, onClose, siteId, cashbookId, initialData, entryType, customFields, allPaymentModes, allCategories, parties, onPartyAdded, onSave,
   onAddPaymentMode, onAddCategory, onEditPaymentMode, onDeletePaymentMode, onEditCategory, onDeleteCategory, onEditParty, onDeleteParty,
 }: {
   open: boolean; onClose: () => void; siteId: string; cashbookId: string; initialData?: any; entryType: 'IN' | 'OUT'
   customFields: any[]; allPaymentModes: string[]; allCategories: string[]; parties: any[]
-  onPartyAdded: (p: any) => void; onSave: (data: any, addAnother?: boolean) => void; onAddPaymentMode: (v: string) => Promise<void>; onAddCategory: (v: string) => Promise<void>
-  onEditPaymentMode: (oldV: string, newV: string) => Promise<void>; onDeletePaymentMode: (v: string) => Promise<void>
-  onEditCategory: (oldV: string, newV: string) => Promise<void>; onDeleteCategory: (v: string) => Promise<void>
-  onEditParty: (p: any) => Promise<void>; onDeleteParty: (p: any) => Promise<void>
+  onPartyAdded: (p: any) => void; onSave: (data: any, addAnother?: boolean) => void; onAddPaymentMode?: (v: string) => Promise<void>; onAddCategory?: (v: string) => Promise<void>
+  onEditPaymentMode?: (oldV: string, newV: string) => Promise<void>; onDeletePaymentMode?: (v: string) => Promise<void>
+  onEditCategory?: (oldV: string, newV: string) => Promise<void>; onDeleteCategory?: (v: string) => Promise<void>
+  onEditParty?: (p: any) => Promise<void>; onDeleteParty?: (p: any) => Promise<void>
 }) {
   const [partyName, setPartyName]     = useState(initialData?.partyName ?? '')
   const [proofUrl, setProofUrl]       = useState(initialData?.proofUrl ?? '')
@@ -626,7 +626,7 @@ function fmtOrDash(n: number | null | undefined) {
   return n ? fmtAmt(n) : '-'
 }
 
-async function exportToExcel(entries: any[], bookName: string, parties: any[] = [], siteName: string = '') {
+export async function exportToExcel(entries: any[], bookName: string, parties: any[] = [], siteName: string = '') {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('Cashbook')
@@ -750,7 +750,7 @@ async function exportToExcel(entries: any[], bookName: string, parties: any[] = 
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-function exportToPDF(entries: any[], bookName: string, summary: any, parties: any[] = [], siteName: string = '') {
+export function exportToPDF(entries: any[], bookName: string, summary: any, parties: any[] = [], siteName: string = '') {
   let balance = 0
   const logoUrl = `${window.location.origin}/logo.png`
   const now = new Date()
@@ -838,6 +838,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
 }) {
   const [books, setBooks]                 = useState(initialBooks)
   const [parties, setParties]             = useState(initialParties)
+  const [siteParties, setSiteParties]     = useState<any[]>(initialParties)
   const [customPMs, setCustomPMs]         = useState<{ id: string; name: string }[]>(initialCustomPaymentMethods)
   const [customCats, setCustomCats]       = useState<string[]>([])
   const [selectedBook, setSelectedBook]   = useState<string | null>(initialBooks[0]?.id ?? null)
@@ -875,6 +876,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
   const [filterAddedBy, setFilterAddedBy]   = useState('')
   const [filterFrom, setFilterFrom]         = useState('')
   const [filterTo, setFilterTo]             = useState('')
+  const [showMoreFilters, setShowMoreFilters] = useState(false)
 
   // Cross-book report state
   const [crossModal, setCrossModal]       = useState(false)
@@ -911,7 +913,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
 
   useEffect(() => {
     fetch(`/api/parties?siteId=${siteId}`).then(r => r.json())
-      .then(d => { if (Array.isArray(d) && d.length > 0) setParties(d) }).catch(() => {})
+      .then(d => { if (Array.isArray(d)) setSiteParties(d) }).catch(() => {})
   }, [siteId])
 
   // ── Book CRUD ────────────────────────────────────────────────
@@ -1214,20 +1216,27 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                 <option value="">All Parties</option>
                 {uniqueParties.map(p => <option key={p} value={p}>{partyLabel(p, parties)}</option>)}
               </select>
-              <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
-                <option value="">All Categories</option>
-                {uniqueCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-              </select>
-              <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterMode} onChange={e => setFilterMode(e.target.value)}>
-                <option value="">All Modes</option>
-                {uniqueModes.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-              <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterAddedBy} onChange={e => setFilterAddedBy(e.target.value)}>
-                <option value="">All Added By</option>
-                {uniqueAddedBy.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-              <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} title="From" />
-              <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterTo} onChange={e => setFilterTo(e.target.value)} title="To" />
+              {showMoreFilters && (
+                <>
+                  <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+                    <option value="">All Categories</option>
+                    {uniqueCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                  <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterMode} onChange={e => setFilterMode(e.target.value)}>
+                    <option value="">All Modes</option>
+                    {uniqueModes.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <select className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" value={filterAddedBy} onChange={e => setFilterAddedBy(e.target.value)}>
+                    <option value="">All Added By</option>
+                    {uniqueAddedBy.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} title="From" />
+                  <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterTo} onChange={e => setFilterTo(e.target.value)} title="To" />
+                </>
+              )}
+              <button type="button" onClick={() => setShowMoreFilters(s => !s)} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap px-2 py-2">
+                {showMoreFilters ? 'Show less' : 'Show more'}
+              </button>
               {hasFilters && <button type="button" onClick={() => { setFilterSearch(''); setFilterType(''); setFilterParty(''); setFilterCategory(''); setFilterMode(''); setFilterAddedBy(''); setFilterFrom(''); setFilterTo('') }} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap">Clear</button>}
             </div>
           </div>
@@ -1268,7 +1277,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                         else setSelected(prev => { const n = new Set(prev); paginated.forEach(e => n.delete(e.id)); return n })
                       }} />
                   </th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Daate</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Date</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Details</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Mode</th>
@@ -1400,8 +1409,8 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                   <select className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={crossParty} onChange={e => setCrossParty(e.target.value)}>
                     <option value="">All Parties</option>
-                    {[...new Set(entries.map((e: any) => e.partyName).filter(Boolean))].map(p => (
-                      <option key={p} value={p}>{partyLabel(p, parties)}</option>
+                    {siteParties.map((p: any) => (
+                      <option key={p.id ?? p.name} value={p.name}>{partyLabel(p.name, siteParties)}</option>
                     ))}
                   </select>
                 </div>

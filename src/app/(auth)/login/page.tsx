@@ -15,7 +15,7 @@ export default function LoginPage() {
     const result = await loginAction(new FormData(e.currentTarget))
     setLoading(false)
     if (result?.error) setError(result.error)
-    else { router.push('/dashboard'); router.refresh() }
+    else { router.push(result?.redirectTo ?? '/dashboard'); router.refresh() }
   }
 
   return (

@@ -7,6 +7,15 @@ import { eq, desc, and, gte, lte } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import bcrypt from 'bcryptjs'
 
+// A book-access user may only act on the single cashbook they were granted.
+async function requireBookAccess(cashbookId: string) {
+  const session = await requireSession()
+  if (!session) return null
+  if (session.role === 'ADMIN') return session
+  if (session.role === 'CASHBOOK_ACCESS' && session.cashbookId === cashbookId) return session
+  return null
+}
+
 // ── Cashbooks CRUD ─────────────────────────────────────────────
 
 export async function createCashbook(siteId: string, name: string, description?: string) {
@@ -16,6 +25,13 @@ export async function createCashbook(siteId: string, name: string, description?:
   await db.insert(cashbooks).values({ id, siteId, name: name.trim(), description: description?.trim() || null })
   revalidatePath(`/sites/${siteId}/accounting`)
   return { success: true, id }
+}
+
+export async function getCashbookById(cashbookId: string) {
+  const session = await requireBookAccess(cashbookId)
+  if (!session) return null
+  const [book] = await db.select().from(cashbooks).where(eq(cashbooks.id, cashbookId))
+  return book ?? null
 }
 
 export async function getCashbooks(siteId: string) {
@@ -43,7 +59,7 @@ export async function deleteCashbook(id: string, siteId: string) {
 // ── Cashbook Entries CRUD ─────────────────────────────────────
 
 export async function addCashbookEntry(data: Record<string, unknown>) {
-  const session = await requireAdmin()
+  const session = await requireBookAccess(data.cashbookId as string)
   if (!session) return { error: 'Forbidden' }
   const id = crypto.randomUUID()
   await db.insert(cashbookEntries).values({
@@ -71,7 +87,9 @@ export async function addCashbookEntry(data: Record<string, unknown>) {
 }
 
 export async function updateCashbookEntry(id: string, data: Record<string, unknown>, siteId: string) {
-  const session = await requireAdmin()
+  const [existing] = await db.select().from(cashbookEntries).where(eq(cashbookEntries.id, id))
+  if (!existing) return { error: 'Entry not found' }
+  const session = await requireBookAccess(existing.cashbookId)
   if (!session) return { error: 'Forbidden' }
   await db.update(cashbookEntries).set({
     type:              data.type as string,
@@ -94,7 +112,7 @@ export async function updateCashbookEntry(id: string, data: Record<string, unkno
 }
 
 export async function getCashbookEntries(cashbookId: string) {
-  const session = await requireSession()
+  const session = await requireBookAccess(cashbookId)
   if (!session) return []
   return db.select().from(cashbookEntries)
     .where(eq(cashbookEntries.cashbookId, cashbookId))
@@ -127,7 +145,9 @@ export async function getAllEntriesBySite(siteId: string, filters?: {
 }
 
 export async function deleteCashbookEntry(id: string, siteId: string) {
-  const session = await requireAdmin()
+  const [existing] = await db.select().from(cashbookEntries).where(eq(cashbookEntries.id, id))
+  if (!existing) return { error: 'Entry not found' }
+  const session = await requireBookAccess(existing.cashbookId)
   if (!session) return { error: 'Forbidden' }
   await db.delete(cashbookEntries).where(eq(cashbookEntries.id, id))
   revalidatePath(`/sites/${siteId}/accounting`)
@@ -137,13 +157,13 @@ export async function deleteCashbookEntry(id: string, siteId: string) {
 // ── Parties CRUD ──────────────────────────────────────────────
 
 export async function getParties(cashbookId: string) {
-  const session = await requireSession()
+  const session = await requireBookAccess(cashbookId)
   if (!session) return []
   return db.select().from(parties).where(eq(parties.cashbookId, cashbookId)).orderBy(parties.name)
 }
 
 export async function createParty(cashbookId: string, siteId: string, name: string, type?: string, phone?: string) {
-  const session = await requireAdmin()
+  const session = await requireBookAccess(cashbookId)
   if (!session) return { error: 'Forbidden' }
   if (!name?.trim()) return { error: 'Party name is required' }
   const id = crypto.randomUUID()
@@ -203,7 +223,7 @@ export async function deleteCategory(cashbookId: string, name: string, siteId: s
 // ── Custom Fields ─────────────────────────────────────────────
 
 export async function getCustomFields(cashbookId: string) {
-  const session = await requireSession()
+  const session = await requireBookAccess(cashbookId)
   if (!session) return []
   return db.select().from(cashbookCustomFields)
     .where(eq(cashbookCustomFields.cashbookId, cashbookId))

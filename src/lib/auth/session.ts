@@ -5,10 +5,12 @@ const SECRET      = new TextEncoder().encode(process.env.JWT_SECRET || 'sitesutr
 const COOKIE_NAME = 'sitesutra_session'
 
 export interface SessionPayload {
-  userId: string
-  email:  string
-  role:   'ADMIN' | 'SUPERVISOR'
-  name:   string
+  userId:     string
+  email:      string
+  role:       'ADMIN' | 'SUPERVISOR' | 'CASHBOOK_ACCESS'
+  name:       string
+  cashbookId?: string
+  siteId?:    string
 }
 
 export async function createSession(payload: SessionPayload) {
