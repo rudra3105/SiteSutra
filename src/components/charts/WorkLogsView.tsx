@@ -3,62 +3,294 @@
 import { useState } from 'react'
 import {
   createSiteLocation,
-  updateLocationStage,
   updateSiteLocation,
+  updateLocationStageField,
+  updateLocationRaField,
   deleteSiteLocation,
 } from '@/actions/locations'
 import { createWorkLog } from '@/actions/worklogs'
+import { STAGE_COLUMNS, RA_OPTIONS } from '@/lib/stages'
 
 // ── Constants ─────────────────────────────────────────────────
-
-const WORK_STAGES = [
-  { value: 'FOUNDATION', label: 'Foundation', color: 'bg-amber-500',   text: 'text-amber-700',  bg: 'bg-amber-50  border-amber-300'  },
-  { value: 'ERECTION',   label: 'Erection',   color: 'bg-blue-500',    text: 'text-blue-700',   bg: 'bg-blue-50   border-blue-300'   },
-  { value: 'STRINGING',  label: 'Stringing',  color: 'bg-purple-500',  text: 'text-purple-700', bg: 'bg-purple-50 border-purple-300' },
-  { value: 'FINISHING',  label: 'Finishing',  color: 'bg-orange-500',  text: 'text-orange-700', bg: 'bg-orange-50 border-orange-300' },
-  { value: 'COMPLETED',  label: 'Completed',  color: 'bg-emerald-500', text: 'text-emerald-700',bg: 'bg-emerald-50 border-emerald-300'},
-]
 
 const TOWER_TYPES = [
   'Tangent', 'Angle', 'Dead End', 'Section', 'Transposition',
   'River Crossing', 'Road Crossing', 'Terminal', 'Custom'
 ]
 
-function stageInfo(value: string) {
-  return WORK_STAGES.find(s => s.value === value) ?? WORK_STAGES[0]
+const COLOR_CLASSES: Record<string, string> = {
+  green:  'bg-emerald-50 text-emerald-700 border-emerald-300',
+  yellow: 'bg-amber-50   text-amber-700   border-amber-300',
+  red:    'bg-red-50     text-red-700     border-red-300',
+}
+const EMPTY_CLASSES = 'bg-white text-slate-400 border-slate-200'
+
+function optionColor(col: typeof STAGE_COLUMNS[number], value: string | null | undefined) {
+  if (!value) return EMPTY_CLASSES
+  const opt = col.options.find(o => o.value === value)
+  return opt ? COLOR_CLASSES[opt.color] : EMPTY_CLASSES
+}
+
+// Parses tower-type strings like "PS+0", "PR+6" into a {type, angle} pair for the
+// type/angle summary matrix. Non-"+" types (e.g. "B TYPE DP") bucket under angle "0".
+function parseTowerType(towerType: string) {
+  const t = (towerType || '').trim()
+  const m = t.match(/^(.*?)\+(\d+)$/)
+  if (m) return { type: m[1].trim(), angle: m[2].trim() }
+  return { type: t || 'Unknown', angle: '0' }
+}
+
+// ── Excel export: Locations + Progress Summary + Tower Type Summary ─────────
+async function exportLocationsToExcel(locations: any[], siteName: string) {
+  const ExcelJS = (await import('exceljs')).default
+  const workbook = new ExcelJS.Workbook()
+  const thin = { style: 'thin' as const, color: { argb: 'FFCBD5E1' } }
+  const allBorder = { top: thin, bottom: thin, left: thin, right: thin }
+
+  // ── Sheet 1: Locations — two rows per tower (main row + span row below),
+  //    color-coded status cells with an in-cell dropdown, matching the source sheet look ──
+  const FILL: Record<string, string> = { green: 'FF93C47D', yellow: 'FFFFD966', red: 'FFE06666' }
+  const FONT: Record<string, string> = { green: 'FF274E13', yellow: 'FF7F6000', red: 'FF660000' }
+
+  const locSheet = workbook.addWorksheet('Locations')
+  const coreHeaders = ['Sr No.', 'Loc No.', 'Tower type', 'Span']
+  const stageHeaders = STAGE_COLUMNS.map(c => c.label)
+  const dateHeaders  = STAGE_COLUMNS.map(c => `${c.label} Date`)
+  const headers = [...coreHeaders, ...stageHeaders, ...dateHeaders]
+  const headerRow = locSheet.addRow(headers)
+  headerRow.eachCell(c => {
+    c.font = { bold: true, size: 11, color: { argb: 'FF990000' } }
+    c.alignment = { horizontal: 'center', vertical: 'middle' }
+    c.border = { top: thin, bottom: { style: 'medium', color: { argb: 'FF990000' } }, left: thin, right: thin }
+  })
+  headerRow.height = 22
+
+  const STAGE_COL_START = coreHeaders.length + 1 // column E
+  const DATE_COL_START  = STAGE_COL_START + STAGE_COLUMNS.length
+
+  locations.forEach((loc, i) => {
+    const r1 = locSheet.rowCount + 1
+    const r2 = r1 + 1
+
+    // Row 1: Sr No / Loc No / Tower type / stage statuses / dates
+    const row1Vals: (string | number)[] = [i + 1, loc.locationNo, loc.towerType, '']
+    for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.statusField] ?? '')
+    for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.dateField] ?? '')
+    locSheet.addRow(row1Vals)
+    // Row 2: blank Sr/Loc/Type, Span value, blank stage/date cells (kept for the merged look)
+    locSheet.addRow(['', '', '', loc.span ?? ''])
+
+    // Vertically merge Sr No, Loc No, Tower type across the pair of rows
+    for (let c = 1; c <= 3; c++) locSheet.mergeCells(r1, c, r2, c)
+
+    // Style + merge each stage's status/date cell across the pair, with color + dropdown
+    STAGE_COLUMNS.forEach((col, idx) => {
+      const statusCol = STAGE_COL_START + idx
+      const dateCol    = DATE_COL_START + idx
+      const value = loc[col.statusField] ?? ''
+      locSheet.mergeCells(r1, statusCol, r2, statusCol)
+      locSheet.mergeCells(r1, dateCol, r2, dateCol)
+
+      const statusCell = locSheet.getCell(r1, statusCol)
+      const opt = col.options.find(o => o.value === value)
+      if (opt) {
+        statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FILL[opt.color] } }
+        statusCell.font = { bold: true, color: { argb: FONT[opt.color] } }
+      }
+      statusCell.alignment = { horizontal: 'center', vertical: 'middle' }
+      statusCell.dataValidation = { type: 'list', allowBlank: true, formulae: [`"${col.options.map(o => o.value).join(',')}"`] }
+
+      const dateCell = locSheet.getCell(r1, dateCol)
+      dateCell.alignment = { horizontal: 'center', vertical: 'middle' }
+    })
+
+    for (let c = 1; c <= headers.length; c++) {
+      locSheet.getCell(r1, c).border = allBorder
+      locSheet.getCell(r2, c).border = allBorder
+    }
+    const spanCell = locSheet.getCell(r2, 4)
+    spanCell.alignment = { horizontal: 'center' }
+  })
+
+  // ── Totals row: span sum, and per-stage completed count (each column's own rule) ──
+  const spanTotal = locations.reduce((s, l) => s + (Number(l.span) || 0), 0)
+  const totalsVals: (string | number)[] = ['', '', 'Total', spanTotal]
+  for (const col of STAGE_COLUMNS) totalsVals.push(locations.filter(l => col.isCompleted(l[col.statusField])).length)
+  for (let i = 0; i < STAGE_COLUMNS.length; i++) totalsVals.push('')
+  const totalsRow = locSheet.addRow(totalsVals)
+  totalsRow.eachCell({ includeEmpty: true }, c => {
+    c.font = { bold: true }
+    c.alignment = { horizontal: 'center', vertical: 'middle' }
+    c.border = { top: { style: 'medium', color: { argb: 'FF990000' } }, bottom: thin, left: thin, right: thin }
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F3F3' } }
+  })
+
+  locSheet.getColumn(1).width = 8
+  locSheet.getColumn(2).width = 10
+  locSheet.getColumn(3).width = 14
+  locSheet.getColumn(4).width = 10
+  for (let i = 0; i < STAGE_COLUMNS.length; i++) locSheet.getColumn(STAGE_COL_START + i).width = 13
+  for (let i = 0; i < STAGE_COLUMNS.length; i++) locSheet.getColumn(DATE_COL_START + i).width = 13
+  locSheet.views = [{ state: 'frozen', ySplit: 1 }]
+
+  // ── Sheet 2: Progress Summary (mirrors WORKED / COMPLETED / BALANCE) ──
+  const sumSheet = workbook.addWorksheet('Progress Summary')
+  const sumHeaderRow = sumSheet.addRow(['Stage', 'Total Towers', 'Completed', 'Balance', 'Completed %'])
+  sumHeaderRow.eachCell(c => { c.font = { bold: true }; c.alignment = { horizontal: 'center' }; c.border = allBorder })
+  const total = locations.length
+  for (const col of STAGE_COLUMNS) {
+    const completed = locations.filter(l => col.isCompleted(l[col.statusField])).length
+    const r = sumSheet.addRow([col.label, total, completed, total - completed, total > 0 ? Math.round((completed / total) * 100) + '%' : '0%'])
+    r.eachCell(c => { c.border = allBorder; c.alignment = { horizontal: 'center' } })
+  }
+  sumSheet.columns.forEach(c => { c.width = 16 })
+
+  // ── Sheet 2b: Billing Summary — WORKED / BILLED (RA rounds), like the source sheet ──
+  const billedCols = STAGE_COLUMNS.filter(c => c.raField)
+  const billSheet = workbook.addWorksheet('Billing Summary')
+  const HEADER_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFD9E2F3' } }
+  const HEADER_FONT = { bold: true, color: { argb: 'FF990000' } }
+
+  const billHeaderRow = billSheet.addRow(['DESCRIPTION', '', ...billedCols.map(c => c.label.toUpperCase())])
+  billHeaderRow.eachCell(c => { c.font = HEADER_FONT; c.fill = HEADER_FILL; c.alignment = { horizontal: 'center', vertical: 'middle' }; c.border = allBorder })
+  billSheet.mergeCells(billHeaderRow.number, 1, billHeaderRow.number, 2)
+
+  function billRow(label: string, values: (string | number)[], opts: { bold?: boolean; fill?: string } = {}) {
+    const r = billSheet.addRow(['', label, ...values])
+    r.eachCell({ includeEmpty: true }, c => {
+      c.border = allBorder
+      c.alignment = { horizontal: 'center', vertical: 'middle' }
+      if (opts.bold) c.font = { bold: true, color: opts.fill ? { argb: 'FF990000' } : undefined }
+      if (opts.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: opts.fill } }
+    })
+    return r
+  }
+
+  // ── WORKED block ──
+  const workedStartRow = billSheet.rowCount + 1
+  billRow('LOI QTY',   billedCols.map(() => total))
+  billRow('COMPLETED', billedCols.map(c => locations.filter(l => c.isCompleted(l[c.statusField])).length))
+  billRow('BALANCE',   billedCols.map(c => total - locations.filter(l => c.isCompleted(l[c.statusField])).length), { bold: true })
+  billSheet.mergeCells(workedStartRow, 1, workedStartRow + 2, 1)
+  const workedLabel = billSheet.getCell(workedStartRow, 1)
+  workedLabel.value = 'WORKED'
+  workedLabel.font = HEADER_FONT
+  workedLabel.fill = HEADER_FILL
+  workedLabel.alignment = { horizontal: 'center', vertical: 'middle' }
+
+  billSheet.addRow([]) // spacer
+
+  // ── BILLED block (RA rounds) ──
+  const billedStartRow = billSheet.rowCount + 1
+  const raCounts: Record<string, number[]> = {}
+  for (const opt of RA_OPTIONS) {
+    raCounts[opt] = billedCols.map(c => locations.filter(l => (l[c.raField!] ?? '') === opt).length)
+    billRow(opt, raCounts[opt])
+  }
+  const totalBilled = billedCols.map((_, i) => RA_OPTIONS.reduce((s, opt) => s + raCounts[opt][i], 0))
+  billRow('TOTAL', totalBilled, { bold: true, fill: 'FFD9E2F3' })
+  billSheet.mergeCells(billedStartRow, 1, billedStartRow + RA_OPTIONS.length - 1, 1)
+  const billedLabel = billSheet.getCell(billedStartRow, 1)
+  billedLabel.value = 'BILLED'
+  billedLabel.font = HEADER_FONT
+  billedLabel.fill = HEADER_FILL
+  billedLabel.alignment = { horizontal: 'center', vertical: 'middle' }
+
+  billRow('BALANCE', billedCols.map((c, i) => {
+    const completed = locations.filter(l => c.isCompleted(l[c.statusField])).length
+    return completed - totalBilled[i]
+  }))
+
+  billSheet.getColumn(1).width = 4
+  billSheet.getColumn(2).width = 14
+  for (let i = 0; i < billedCols.length; i++) billSheet.getColumn(3 + i).width = 14
+
+  // ── Sheet 3: Tower Type Summary (type x angle matrix, like the source sheet) ──
+  const typeSheet = workbook.addWorksheet('Tower Type Summary')
+  const parsed = locations.map(l => parseTowerType(l.towerType))
+  const types  = [...new Set(parsed.map(p => p.type))].sort()
+  const angles = [...new Set(parsed.map(p => p.angle))].sort((a, b) => Number(a) - Number(b))
+  const typeHeaderRow = typeSheet.addRow(['Type', ...angles.map(a => `${a}°`), 'Total'])
+  typeHeaderRow.eachCell(c => { c.font = { bold: true }; c.alignment = { horizontal: 'center' }; c.border = allBorder })
+  const angleTotals: Record<string, number> = Object.fromEntries(angles.map(a => [a, 0]))
+  let grandTotal = 0
+  for (const type of types) {
+    const counts = angles.map(a => parsed.filter(p => p.type === type && p.angle === a).length)
+    counts.forEach((c, i) => { angleTotals[angles[i]] += c })
+    const rowTotal = counts.reduce((s, c) => s + c, 0)
+    grandTotal += rowTotal
+    const r = typeSheet.addRow([type, ...counts, rowTotal])
+    r.eachCell(c => { c.border = allBorder; c.alignment = { horizontal: 'center' } })
+  }
+  const totalRow = typeSheet.addRow(['Total', ...angles.map(a => angleTotals[a]), grandTotal])
+  totalRow.eachCell(c => { c.border = allBorder; c.alignment = { horizontal: 'center' }; c.font = { bold: true } })
+  typeSheet.columns.forEach(c => { c.width = 12 })
+
+  const buffer = await workbook.xlsx.writeBuffer()
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${siteName || 'Site'} - Tower Locations.xlsx`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
 // ── Sub-components ────────────────────────────────────────────
 
-function StageBadge({ stage }: { stage: string }) {
-  const s = stageInfo(stage)
+function StageCell({
+  col, loc, onChange, onChangeRa, loading, raLoading,
+}: {
+  col: typeof STAGE_COLUMNS[number]
+  loc: any
+  onChange: (stageKey: string, value: string) => void
+  onChangeRa: (stageKey: string, value: string) => void
+  loading: boolean
+  raLoading: boolean
+}) {
+  const value = loc[col.statusField] ?? ''
+  const date  = loc[col.dateField] ?? ''
+  const ra    = col.raField ? (loc[col.raField] ?? '') : ''
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold border ${s.bg} ${s.text}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${s.color}`} />
-      {s.label}
-    </span>
+    <td className="px-2 py-2 align-top">
+      <select
+        value={value}
+        disabled={loading}
+        onChange={(e) => onChange(col.key, e.target.value)}
+        className={`w-full text-xs font-bold rounded-lg border px-1.5 py-1 outline-none disabled:opacity-50 ${optionColor(col, value)}`}
+      >
+        <option value="">—</option>
+        {col.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <p className="text-[10px] text-slate-500 mt-0.5 text-center min-h-[14px]">{date || ''}</p>
+      {col.raField && (
+        <select
+          value={ra}
+          disabled={raLoading}
+          onChange={(e) => onChangeRa(col.key, e.target.value)}
+          className="w-full text-[10px] font-semibold rounded-md border border-slate-200 bg-white text-slate-600 px-1 py-0.5 mt-0.5 outline-none disabled:opacity-50"
+        >
+          <option value="">Billing —</option>
+          {RA_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      )}
+    </td>
   )
 }
 
 function StageProgress({ locations }: { locations: any[] }) {
   if (locations.length === 0) return null
-  const counts: Record<string, number> = {}
-  for (const s of WORK_STAGES) counts[s.value] = 0
-  for (const l of locations) counts[l.workStage] = (counts[l.workStage] ?? 0) + 1
-
   return (
     <div className="space-y-2">
-      {WORK_STAGES.map(s => {
-        const count = counts[s.value] ?? 0
-        const pct   = locations.length > 0 ? Math.round((count / locations.length) * 100) : 0
+      {STAGE_COLUMNS.map(col => {
+        const count = locations.filter(l => col.isCompleted(l[col.statusField])).length
+        const pct   = Math.round((count / locations.length) * 100)
         return (
-          <div key={s.value}>
+          <div key={col.key}>
             <div className="flex justify-between text-xs font-semibold mb-1">
-              <span className={s.text}>{s.label}</span>
+              <span className="text-slate-700">{col.label}</span>
               <span className="text-slate-600">{count} location{count !== 1 ? 's' : ''} ({pct}%)</span>
             </div>
             <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-              <div className={`h-full rounded-full transition-all ${s.color}`} style={{ width: `${pct}%` }} />
+              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
             </div>
           </div>
         )
@@ -100,11 +332,13 @@ function WorkLogBar({ logs }: { logs: any[] }) {
 
 export function WorkLogsView({
   siteId,
+  siteName,
   logs,
   workTypes,
   initialLocations,
 }: {
   siteId: string
+  siteName?: string
   logs: any[]
   workTypes: any[]
   initialLocations: any[]
@@ -115,7 +349,7 @@ export function WorkLogsView({
   const [editingLoc, setEditingLoc]     = useState<any | null>(null)
   const [showAddLog, setShowAddLog]     = useState(false)
   const [loading, setLoading]           = useState(false)
-  const [stageLoading, setStageLoading] = useState<string | null>(null)
+  const [cellLoading, setCellLoading]   = useState<string | null>(null)
   const [error, setError]               = useState('')
   const [ok, setOk]                     = useState('')
 
@@ -124,14 +358,20 @@ export function WorkLogsView({
   // ── Add / Edit Location ─────────────────────────────────────
   async function handleSaveLocation(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setLoading(true); setError('')
-    const fd   = new FormData(e.currentTarget)
+    const fd = new FormData(e.currentTarget)
+    const stages: Record<string, string> = {}
+    for (const col of STAGE_COLUMNS) stages[col.key] = (fd.get(col.key) as string) || ''
+    const ra: Record<string, string> = {}
+    for (const col of STAGE_COLUMNS) if (col.raField) ra[col.key] = (fd.get(`ra_${col.key}`) as string) || ''
+
     const data = {
       siteId,
       locationNo: fd.get('locationNo') as string,
       towerType:  fd.get('towerType')  as string,
-      span:       fd.get('span')       as string,
-      workStage:  fd.get('workStage')  as string,
-      notes:      fd.get('notes')      as string,
+      span:       (fd.get('span') as string) || '',
+      notes:      fd.get('notes') as string,
+      stages,
+      ra,
     }
 
     let result: any
@@ -148,13 +388,28 @@ export function WorkLogsView({
     window.location.reload()
   }
 
-  // ── Stage change ────────────────────────────────────────────
-  async function handleStageChange(locId: string, newStage: string) {
-    setStageLoading(locId)
-    await updateLocationStage(locId, newStage, siteId)
-    setLocations(prev => prev.map(l => l.id === locId ? { ...l, workStage: newStage } : l))
-    setStageLoading(null)
-    flash('Stage updated')
+  // ── Stage cell change (one-tap, per column) ─────────────────
+  async function handleStageChange(locId: string, stageKey: string, value: string) {
+    setCellLoading(`${locId}:${stageKey}`)
+    const result: any = await updateLocationStageField(locId, stageKey, value, siteId)
+    if (!result?.error) {
+      const col = STAGE_COLUMNS.find(c => c.key === stageKey)!
+      setLocations(prev => prev.map(l => l.id === locId
+        ? { ...l, [col.statusField]: result[col.statusField], [col.dateField]: result[col.dateField] }
+        : l))
+    }
+    setCellLoading(null)
+  }
+
+  // ── RA billing change (one-tap, per column) ──────────────────
+  async function handleRaChange(locId: string, stageKey: string, value: string) {
+    setCellLoading(`${locId}:${stageKey}:ra`)
+    const result: any = await updateLocationRaField(locId, stageKey, value, siteId)
+    if (!result?.error) {
+      const col = STAGE_COLUMNS.find(c => c.key === stageKey)!
+      setLocations(prev => prev.map(l => l.id === locId ? { ...l, [col.raField!]: result[col.raField!] } : l))
+    }
+    setCellLoading(null)
   }
 
   // ── Delete location ─────────────────────────────────────────
@@ -185,9 +440,15 @@ export function WorkLogsView({
     window.location.reload()
   }
 
-  const totalLocations  = locations.length
-  const completed       = locations.filter(l => l.workStage === 'COMPLETED').length
-  const overallPct      = totalLocations > 0 ? Math.round((completed / totalLocations) * 100) : 0
+  const totalLocations = locations.length
+  const opgwCol         = STAGE_COLUMNS[STAGE_COLUMNS.length - 1]
+  const completed        = locations.filter(l => opgwCol.isCompleted(l[opgwCol.statusField])).length
+  const overallPct       = totalLocations > 0 ? Math.round((completed / totalLocations) * 100) : 0
+
+  // Span is the distance from the previous tower — only hide the field when adding
+  // the very first tower ever (no towers exist yet). Editing always shows it, so an
+  // existing span value never gets silently wiped by a form that omits the field.
+  const isFirstEntry = !editingLoc && locations.length === 0
 
   return (
     <div className="space-y-5">
@@ -200,7 +461,7 @@ export function WorkLogsView({
         <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-slate-900 text-sm">Overall Site Progress</h3>
-            <span className="text-slate-600 text-sm font-semibold">{completed}/{totalLocations} completed ({overallPct}%)</span>
+            <span className="text-slate-600 text-sm font-semibold">{completed}/{totalLocations} completed (OPGW) ({overallPct}%)</span>
           </div>
           <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
             <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${overallPct}%` }} />
@@ -228,7 +489,12 @@ export function WorkLogsView({
       {activeTab === 'locations' && (
         <div className="space-y-4">
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            {locations.length > 0 && (
+              <button onClick={() => exportLocationsToExcel(locations, siteName || '')} className="btn-secondary text-sm">
+                ↓ Download Excel
+              </button>
+            )}
             <button onClick={() => { setShowAddLoc(true); setEditingLoc(null) }} className="btn text-sm">
               + Add Location
             </button>
@@ -259,21 +525,37 @@ export function WorkLogsView({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {!isFirstEntry && (
                 <div>
                   <label className="label">Span</label>
                   <input name="span" className="input"
                     defaultValue={editingLoc?.span ?? ''}
-                    placeholder="e.g. A–B, 250m, Tower 1–2" />
-                  <p className="text-slate-500 text-xs mt-1">The span this location covers</p>
+                    placeholder="Distance from the previous tower, e.g. 250" />
+                  <p className="text-slate-500 text-xs mt-1">Distance between this tower and the previous one in the sequence</p>
                 </div>
-                <div>
-                  <label className="label">Work Stage</label>
-                  <select name="workStage" className="input" defaultValue={editingLoc?.workStage ?? 'FOUNDATION'}>
-                    {WORK_STAGES.map(s => (
-                      <option key={s.value} value={s.value}>{s.label}</option>
-                    ))}
-                  </select>
+              )}
+              {isFirstEntry && (
+                <p className="text-slate-500 text-xs">This is the first tower in the sequence — no span to enter.</p>
+              )}
+
+              <div>
+                <p className="label mb-2">Stage Status</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {STAGE_COLUMNS.map(col => (
+                    <div key={col.key}>
+                      <label className="text-xs font-semibold text-slate-600">{col.label}</label>
+                      <select name={col.key} className="input" defaultValue={editingLoc?.[col.statusField] ?? ''}>
+                        <option value="">—</option>
+                        {col.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                      {col.raField && (
+                        <select name={`ra_${col.key}`} className="input mt-1 text-xs" defaultValue={editingLoc?.[col.raField] ?? ''}>
+                          <option value="">Billing —</option>
+                          {RA_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -294,7 +576,7 @@ export function WorkLogsView({
             </form>
           )}
 
-          {/* Locations list */}
+          {/* Locations table */}
           {locations.length === 0 ? (
             <div className="card p-10 text-center">
               <div className="w-14 h-14 bg-orange-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -305,68 +587,61 @@ export function WorkLogsView({
               </div>
               <p className="text-slate-700 font-bold mb-1">No locations added yet</p>
               <p className="text-slate-500 text-sm mb-4">
-                Add tower locations with their type and span, then track the work stage for each one
+                Add tower locations in sequence — span, stage status and completion dates are tracked per tower
               </p>
               <button onClick={() => setShowAddLoc(true)} className="btn">Add First Location</button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {locations.map(loc => (
-                <div key={loc.id} className="card p-4">
-                  {/* Location header */}
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-slate-900 text-sm">{loc.locationNo}</span>
+            <div className="card overflow-x-auto">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-left">
+                    <th className="px-3 py-2 text-xs font-bold text-slate-600 whitespace-nowrap">Location</th>
+                    <th className="px-3 py-2 text-xs font-bold text-slate-600 whitespace-nowrap">Type</th>
+                    <th className="px-3 py-2 text-xs font-bold text-slate-600 whitespace-nowrap">Span</th>
+                    {STAGE_COLUMNS.map(col => (
+                      <th key={col.key} className="px-2 py-2 text-xs font-bold text-slate-600 whitespace-nowrap text-center">{col.label}</th>
+                    ))}
+                    <th className="px-3 py-2 text-xs font-bold text-slate-600 whitespace-nowrap">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {locations.map((loc, i) => (
+                    <tr key={loc.id} className="align-top">
+                      <td className="px-3 py-2 font-bold text-slate-900 text-sm whitespace-nowrap">{loc.locationNo}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
                         <span className="badge badge-blue text-xs">{loc.towerType}</span>
-                        {loc.span && (
-                          <span className="text-slate-600 text-xs font-medium">
-                            Span: {loc.span}
-                          </span>
-                        )}
-                      </div>
-                      {loc.notes && <p className="text-slate-500 text-xs mt-1">{loc.notes}</p>}
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <StageBadge stage={loc.workStage} />
-                      <button onClick={() => { setEditingLoc(loc); setShowAddLoc(false) }}
-                        className="text-slate-400 hover:text-slate-700 transition-colors p-1">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </button>
-                      <button onClick={() => handleDeleteLoc(loc.id, loc.locationNo)}
-                        className="text-slate-400 hover:text-red-600 transition-colors p-1">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Stage selector — one-tap update */}
-                  <div>
-                    <p className="text-slate-600 text-xs font-semibold uppercase tracking-wider mb-2">Change Stage</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {WORK_STAGES.map(s => {
-                        const active = loc.workStage === s.value
-                        const spin   = stageLoading === loc.id
-                        return (
-                          <button key={s.value} disabled={spin}
-                            onClick={() => handleStageChange(loc.id, s.value)}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border-2 transition-all disabled:opacity-50 ${
-                              active
-                                ? `${s.bg} ${s.text} border-current`
-                                : 'bg-white border-slate-200 text-slate-600 hover:border-slate-400'
-                            }`}>
-                            {spin && active ? '⟳' : s.label}
+                      </td>
+                      <td className="px-3 py-2 text-slate-600 text-sm whitespace-nowrap">
+                        {i === 0 ? <span className="text-slate-400">—</span> : (loc.span || <span className="text-slate-400">—</span>)}
+                      </td>
+                      {STAGE_COLUMNS.map(col => (
+                        <StageCell key={col.key} col={col} loc={loc}
+                          loading={cellLoading === `${loc.id}:${col.key}`}
+                          raLoading={cellLoading === `${loc.id}:${col.key}:ra`}
+                          onChange={(stageKey, value) => handleStageChange(loc.id, stageKey, value)}
+                          onChangeRa={(stageKey, value) => handleRaChange(loc.id, stageKey, value)} />
+                      ))}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => { setEditingLoc(loc); setShowAddLoc(false) }}
+                            className="text-slate-400 hover:text-slate-700 transition-colors p-1">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
                           </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ))}
+                          <button onClick={() => handleDeleteLoc(loc.id, loc.locationNo)}
+                            className="text-slate-400 hover:text-red-600 transition-colors p-1">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>

@@ -137,7 +137,15 @@ async function run() {
     `CREATE TABLE IF NOT EXISTS site_locations (
       id TEXT PRIMARY KEY, site_id TEXT NOT NULL, location_no TEXT NOT NULL,
       tower_type TEXT NOT NULL, span TEXT, work_stage TEXT DEFAULT 'FOUNDATION',
-      notes TEXT, created_at TEXT, updated_at TEXT)`,
+      notes TEXT,
+      excavation_status TEXT, excavation_date TEXT,
+      foundation_status TEXT, foundation_date TEXT, foundation_ra TEXT,
+      erection_status TEXT, erection_date TEXT, erection_ra TEXT,
+      earthing_status TEXT, earthing_date TEXT, earthing_ra TEXT,
+      tack_welding_status TEXT, tack_welding_date TEXT, tack_welding_ra TEXT,
+      stringing_status TEXT, stringing_date TEXT, stringing_ra TEXT,
+      opgw_status TEXT, opgw_date TEXT,
+      created_at TEXT, updated_at TEXT)`,
   ]
 
   for (const sql of tables) {
@@ -148,6 +156,25 @@ async function run() {
   const migrations = [
     'ALTER TABLE cashbook_entries ADD COLUMN added_by TEXT',
     'ALTER TABLE cashbook_entries ADD COLUMN added_by_id TEXT',
+    'ALTER TABLE site_locations ADD COLUMN excavation_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN excavation_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN foundation_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN foundation_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN erection_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN erection_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN earthing_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN earthing_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN tack_welding_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN tack_welding_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN stringing_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN stringing_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN opgw_status TEXT',
+    'ALTER TABLE site_locations ADD COLUMN opgw_date TEXT',
+    'ALTER TABLE site_locations ADD COLUMN foundation_ra TEXT',
+    'ALTER TABLE site_locations ADD COLUMN erection_ra TEXT',
+    'ALTER TABLE site_locations ADD COLUMN earthing_ra TEXT',
+    'ALTER TABLE site_locations ADD COLUMN tack_welding_ra TEXT',
+    'ALTER TABLE site_locations ADD COLUMN stringing_ra TEXT',
   ]
   for (const sql of migrations) {
     await db.execute(sql).catch(() => {}) // ignore if column already exists

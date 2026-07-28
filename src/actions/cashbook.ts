@@ -116,7 +116,7 @@ export async function getCashbookEntries(cashbookId: string) {
   if (!session) return []
   return db.select().from(cashbookEntries)
     .where(eq(cashbookEntries.cashbookId, cashbookId))
-    .orderBy(desc(cashbookEntries.date))
+    .orderBy(desc(cashbookEntries.date), desc(cashbookEntries.createdAt))
 }
 
 export async function getAllEntriesBySite(siteId: string, filters?: {
@@ -132,7 +132,7 @@ export async function getAllEntriesBySite(siteId: string, filters?: {
   books.forEach((b: any) => { bookMap[b.id] = b.name })
   let entries: any[] = await db.select().from(cashbookEntries)
     .where(inArray(cashbookEntries.cashbookId, bookIds))
-    .orderBy(desc(cashbookEntries.date))
+    .orderBy(desc(cashbookEntries.date), desc(cashbookEntries.createdAt))
   entries = entries.map((e: any) => ({ ...e, bookName: bookMap[e.cashbookId] ?? '' }))
   if (filters?.category) entries = entries.filter((e: any) => e.category === filters.category)
   if (filters?.type)     entries = entries.filter((e: any) => e.type === filters.type)
@@ -142,6 +142,20 @@ export async function getAllEntriesBySite(siteId: string, filters?: {
   const income  = entries.filter((e: any) => e.type === 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
   const expense = entries.filter((e: any) => e.type !== 'OUT').reduce((s: number, e: any) => s + e.amount, 0)
   return { entries, income, expense, net: income - expense }
+}
+
+export async function getSiteCategories(siteId: string) {
+  const session = await requireSession()
+  if (!session) return []
+  const { inArray } = await import('drizzle-orm')
+  const books = await db.select({ id: cashbooks.id }).from(cashbooks).where(eq(cashbooks.siteId, siteId))
+  if (!books.length) return []
+  const bookIds = books.map((b: any) => b.id)
+  const rows = await db.select({ category: cashbookEntries.category }).from(cashbookEntries)
+    .where(inArray(cashbookEntries.cashbookId, bookIds))
+  const cats = [...new Set(rows.map((r: any) => r.category).filter(Boolean))] as string[]
+  cats.sort((a, b) => a.localeCompare(b))
+  return cats
 }
 
 export async function deleteCashbookEntry(id: string, siteId: string) {

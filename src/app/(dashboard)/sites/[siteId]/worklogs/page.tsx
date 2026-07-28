@@ -3,17 +3,18 @@ export const dynamic = 'force-dynamic'
 
 import { getWorkLogs } from '@/actions/worklogs'
 import { getSiteLocations } from '@/actions/locations'
-import { db, workTypes } from '@/lib/db'
+import { db, workTypes, sites } from '@/lib/db'
 import { eq } from 'drizzle-orm'
 import { WorkLogsView } from '@/components/charts/WorkLogsView'
 
 export default async function WorkLogsPage({ params }) {
   const { siteId } = params
 
-  const [logs, wts, locations] = await Promise.all([
+  const [logs, wts, locations, [site]] = await Promise.all([
     getWorkLogs(siteId),
     db.select().from(workTypes).where(eq(workTypes.siteId, siteId)),
     getSiteLocations(siteId),
+    db.select().from(sites).where(eq(sites.id, siteId)),
   ])
 
   return (
@@ -24,6 +25,7 @@ export default async function WorkLogsPage({ params }) {
       </div>
       <WorkLogsView
         siteId={siteId}
+        siteName={site?.name ?? ''}
         logs={logs}
         workTypes={wts}
         initialLocations={locations}

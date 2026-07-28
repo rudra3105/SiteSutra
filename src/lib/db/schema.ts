@@ -261,9 +261,31 @@ export const siteLocations = sqliteTable('site_locations', {
   siteId:      text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
   locationNo:  text('location_no').notNull(),   // e.g. "T-01", "L-05"
   towerType:   text('tower_type').notNull(),     // e.g. "Tangent", "Angle", "Dead End"
-  span:        text('span'),                     // e.g. "A-B", "250m"
+  span:        text('span'),                     // distance from previous tower — blank for first tower
   workStage:   text('work_stage').notNull().default('FOUNDATION'),
   notes:       text('notes'),
+
+  // ── Per-stage status + auto-filled completion date ──────────
+  excavationStatus:  text('excavation_status'),   // COMP | U/P | ROW
+  excavationDate:    text('excavation_date'),
+  foundationStatus:  text('foundation_status'),   // SR | PSNS | FDBC | PDBC | HR | NDS | ROW
+  foundationDate:    text('foundation_date'),
+  foundationRa:      text('foundation_ra'),       // 1st RA | 2nd RA | 3rd RA | Final
+  erectionStatus:    text('erection_status'),     // COMP | U/P
+  erectionDate:      text('erection_date'),
+  erectionRa:        text('erection_ra'),         // 1st RA | 2nd RA | 3rd RA | Final
+  earthingStatus:    text('earthing_status'),     // COMP | U/P
+  earthingDate:      text('earthing_date'),
+  earthingRa:        text('earthing_ra'),
+  tackWeldingStatus: text('tack_welding_status'), // COMP | U/P
+  tackWeldingDate:   text('tack_welding_date'),
+  tackWeldingRa:     text('tack_welding_ra'),
+  stringingStatus:   text('stringing_status'),    // COMP | ROW
+  stringingDate:     text('stringing_date'),
+  stringingRa:       text('stringing_ra'),
+  opgwStatus:        text('opgw_status'),         // COMP | ROW
+  opgwDate:          text('opgw_date'),
+
   createdAt:   text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt:   text('updated_at').notNull().default(sql`(datetime('now'))`),
 })
