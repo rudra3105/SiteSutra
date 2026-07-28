@@ -205,6 +205,67 @@ async function exportLocationsToExcel(locations: any[], siteName: string) {
   billSheet.getColumn(2).width = 14
   for (let i = 0; i < billedCols.length; i++) billSheet.getColumn(3 + i).width = 14
 
+  // ── Sheet: Tower Diagram — Loc No / Erection / Foundation / Type, span connectors ──
+  const diagSheet = workbook.addWorksheet('Tower Diagram')
+  const erectionCol   = STAGE_COLUMNS.find(c => c.key === 'erection')!
+  const foundationCol = STAGE_COLUMNS.find(c => c.key === 'foundation')!
+  const rowLabels = ['Loc No.', 'Erection', 'Foundation', 'Type of tower']
+  rowLabels.forEach((label, i) => {
+    const cell = diagSheet.getCell(i + 1, 1)
+    cell.value = label
+    cell.font = { bold: true, size: 12 }
+    cell.alignment = { horizontal: 'right', vertical: 'middle' }
+  })
+  diagSheet.getColumn(1).width = 16
+
+  let col = 2
+  locations.forEach((loc, i) => {
+    if (i > 0) {
+      // connector column: span value up top, a line drawn via a bottom border across rows 1-2
+      diagSheet.getColumn(col).width = 8
+      const spanCell = diagSheet.getCell(1, col)
+      spanCell.value = loc.span ?? ''
+      spanCell.font = { bold: true, size: 12 }
+      spanCell.alignment = { horizontal: 'center', vertical: 'bottom' }
+      diagSheet.getCell(2, col).border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
+      diagSheet.getCell(3, col).border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
+      col++
+    }
+    diagSheet.getColumn(col).width = 16
+
+    // Every cell in the tower's column gets a border, even when blank, so an
+    // empty stage still shows a visible box you can identify by position.
+    const locCell = diagSheet.getCell(1, col)
+    locCell.value = loc.locationNo
+    locCell.font = { bold: true, size: 13 }
+    locCell.alignment = { horizontal: 'center', vertical: 'middle' }
+    locCell.border = allBorder
+
+    ;[[2, erectionCol], [3, foundationCol]].forEach(([r, stageCol]: any) => {
+      const value = loc[stageCol.statusField] ?? ''
+      const cell = diagSheet.getCell(r, col)
+      cell.value = value
+      cell.font = { bold: true, size: 12 }
+      cell.alignment = { horizontal: 'center', vertical: 'middle' }
+      const boxBorder = { style: 'medium' as const, color: { argb: 'FF1E293B' } }
+      cell.border = { top: boxBorder, bottom: boxBorder, left: boxBorder, right: boxBorder }
+      const opt = stageCol.options.find((o: any) => o.value === value)
+      if (opt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FILL[opt.color] } }
+    })
+
+    const typeCell = diagSheet.getCell(4, col)
+    typeCell.value = loc.towerType
+    typeCell.font = { bold: true, size: 11 }
+    typeCell.alignment = { horizontal: 'center', vertical: 'middle' }
+    typeCell.border = allBorder
+
+    col++
+  })
+  diagSheet.getRow(1).height = 26
+  diagSheet.getRow(2).height = 30
+  diagSheet.getRow(3).height = 30
+  diagSheet.getRow(4).height = 24
+
   // ── Sheet 3: Tower Type Summary (type x angle matrix, like the source sheet) ──
   const typeSheet = workbook.addWorksheet('Tower Type Summary')
   const parsed = locations.map(l => parseTowerType(l.towerType))
