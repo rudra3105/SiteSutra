@@ -40,11 +40,13 @@ async function run() {
 
   // ── Run SQL migration ──────────────────────────────────────
   console.log('→ Creating tables...')
-  const migrationSQL = fs.readFileSync(
-    path.join(__dirname, '../drizzle/0000_migration.sql'),
-    'utf-8'
-  )
-  await client.query(migrationSQL)
+  const migrationPath = path.join(__dirname, '../drizzle/0000_migration.sql')
+  if (fs.existsSync(migrationPath)) {
+    const migrationSQL = fs.readFileSync(migrationPath, 'utf-8')
+    await client.query(migrationSQL)
+  } else {
+    console.log('⚠ drizzle/0000_migration.sql not found — skipping base table creation (tables must already exist)')
+  }
 
   // ── New tables (v6) ────────────────────────────────────────
   await client.query(`CREATE TABLE IF NOT EXISTS cashbook_custom_fields (
@@ -69,6 +71,27 @@ async function run() {
 
   // ── Parties become cashbook-specific (v7) ──────────────────
   await client.query(`ALTER TABLE parties ADD COLUMN IF NOT EXISTS cashbook_id TEXT REFERENCES cashbooks(id) ON DELETE CASCADE`);
+
+  // ── Tower work-stage tracking on site_locations (v8) ────────
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS excavation_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS excavation_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS foundation_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS foundation_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS foundation_ra TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS erection_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS erection_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS erection_ra TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS earthing_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS earthing_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS earthing_ra TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS tack_welding_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS tack_welding_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS tack_welding_ra TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS stringing_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS stringing_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS stringing_ra TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS opgw_status TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS opgw_date TEXT`);
 
   console.log('✅ Tables ready')
 
