@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import {
   createSiteLocation,
   updateSiteLocation,
@@ -337,29 +337,6 @@ function StageCell({
   )
 }
 
-function StageProgress({ locations }: { locations: any[] }) {
-  if (locations.length === 0) return null
-  return (
-    <div className="space-y-2">
-      {STAGE_COLUMNS.map(col => {
-        const count = locations.filter(l => col.isCompleted(l[col.statusField])).length
-        const pct   = Math.round((count / locations.length) * 100)
-        return (
-          <div key={col.key}>
-            <div className="flex justify-between text-xs font-semibold mb-1">
-              <span className="text-slate-700">{col.label}</span>
-              <span className="text-slate-600">{count} location{count !== 1 ? 's' : ''} ({pct}%)</span>
-            </div>
-            <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function WorkLogBar({ logs }: { logs: any[] }) {
   const groups: Record<string, number> = {}
   for (const log of logs) {
@@ -389,6 +366,308 @@ function WorkLogBar({ logs }: { logs: any[] }) {
   )
 }
 
+// ── Data view modal: same data as the Excel export, on-screen ─────────────
+function LocationsDataModal({
+  locations, siteName, onClose,
+}: {
+  locations: any[]
+  siteName: string
+  onClose: () => void
+}) {
+  const total = locations.length
+  const billedCols = STAGE_COLUMNS.filter(c => c.raField)
+
+  // Tower Diagram columns (mirrors "Tower Diagram" sheet)
+  const erectionCol   = STAGE_COLUMNS.find(c => c.key === 'erection')
+  const foundationCol = STAGE_COLUMNS.find(c => c.key === 'foundation')
+
+  // Progress Summary (mirrors "Progress Summary" sheet)
+  const progressRows = STAGE_COLUMNS.map(col => {
+    const completed = locations.filter(l => col.isCompleted(l[col.statusField])).length
+    return {
+      label: col.label,
+      completed,
+      balance: total - completed,
+      pct: total > 0 ? Math.round((completed / total) * 100) : 0,
+    }
+  })
+
+  // Billing Summary (mirrors "Billing Summary" sheet)
+  const worked = billedCols.map(c => ({
+    completed: locations.filter(l => c.isCompleted(l[c.statusField])).length,
+  }))
+  const raCounts: Record<string, number[]> = {}
+  for (const opt of RA_OPTIONS) {
+    raCounts[opt] = billedCols.map(c => locations.filter(l => (l[c.raField!] ?? '') === opt).length)
+  }
+  const totalBilled = billedCols.map((_, i) => RA_OPTIONS.reduce((s, opt) => s + raCounts[opt][i], 0))
+
+  // Tower Type Summary (mirrors "Tower Type Summary" sheet)
+  const parsed = locations.map(l => parseTowerType(l.towerType))
+  const types  = [...new Set(parsed.map(p => p.type))].sort()
+  const angles = [...new Set(parsed.map(p => p.angle))].sort((a, b) => Number(a) - Number(b))
+  const angleTotals: Record<string, number> = Object.fromEntries(angles.map(a => [a, 0]))
+  const typeRows = types.map(type => {
+    const counts = angles.map(a => parsed.filter(p => p.type === type && p.angle === a).length)
+    counts.forEach((c, i) => { angleTotals[angles[i]] += c })
+    return { type, counts, rowTotal: counts.reduce((s, c) => s + c, 0) }
+  })
+  const grandTotal = typeRows.reduce((s, r) => s + r.rowTotal, 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-[90vw] max-w-none max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <h3 className="font-bold text-slate-900">{siteName ? `${siteName} — ` : ''}Locations Data</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-6">
+
+          {/* Locations (full detail — mirrors "Locations" sheet) */}
+          <section>
+            <h4 className="font-bold text-slate-800 text-sm mb-2">Locations</h4>
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="min-w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600">
+                    <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Sr No.</th>
+                    <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Loc No.</th>
+                    <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Tower type</th>
+                    <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Span</th>
+                    {STAGE_COLUMNS.map(col => (
+                      <th key={col.key} className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">{col.label}</th>
+                    ))}
+                    {STAGE_COLUMNS.map(col => (
+                      <th key={`${col.key}-d`} className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">{col.label} Date</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {locations.map((loc, i) => (
+                    <tr key={loc.id}>
+                      <td className="px-2 py-2 text-center text-slate-700">{i + 1}</td>
+                      <td className="px-2 py-2 text-center font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</td>
+                      <td className="px-2 py-2 text-center text-slate-700 whitespace-nowrap">{loc.towerType}</td>
+                      <td className="px-2 py-2 text-center text-slate-700">{i === 0 ? '—' : (loc.span || '—')}</td>
+                      {STAGE_COLUMNS.map(col => {
+                        const value = loc[col.statusField] ?? ''
+                        return (
+                          <td key={col.key} className="px-1 py-1 text-center">
+                            <span className={`inline-block w-full font-bold rounded border px-1.5 py-1 ${optionColor(col, value)}`}>
+                              {value || '—'}
+                            </span>
+                          </td>
+                        )
+                      })}
+                      {STAGE_COLUMNS.map(col => (
+                        <td key={`${col.key}-d`} className="px-2 py-2 text-center text-slate-500 whitespace-nowrap">
+                          {loc[col.dateField] || '—'}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {/* Totals row: span sum + per-stage completed count */}
+                  <tr className="bg-slate-50 font-bold text-slate-800">
+                    <td className="px-2 py-2 text-center" colSpan={3}>Total</td>
+                    <td className="px-2 py-2 text-center">{locations.reduce((s, l) => s + (Number(l.span) || 0), 0)}</td>
+                    {STAGE_COLUMNS.map(col => (
+                      <td key={col.key} className="px-2 py-2 text-center">
+                        {locations.filter(l => col.isCompleted(l[col.statusField])).length}
+                      </td>
+                    ))}
+                    {STAGE_COLUMNS.map(col => <td key={`${col.key}-d`} className="px-2 py-2" />)}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Progress Summary */}
+          <section>
+            <h4 className="font-bold text-slate-800 text-sm mb-2">Progress Summary</h4>
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600">
+                    <th className="px-3 py-2 text-left font-bold">Stage</th>
+                    <th className="px-3 py-2 text-center font-bold">Total Towers</th>
+                    <th className="px-3 py-2 text-center font-bold">Completed</th>
+                    <th className="px-3 py-2 text-center font-bold">Balance</th>
+                    <th className="px-3 py-2 text-center font-bold">Completed %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {progressRows.map(r => (
+                    <tr key={r.label}>
+                      <td className="px-3 py-2 font-semibold text-slate-800">{r.label}</td>
+                      <td className="px-3 py-2 text-center text-slate-700">{total}</td>
+                      <td className="px-3 py-2 text-center text-emerald-700 font-semibold">{r.completed}</td>
+                      <td className="px-3 py-2 text-center text-slate-700">{r.balance}</td>
+                      <td className="px-3 py-2 text-center text-slate-700">{r.pct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Tower Diagram */}
+          {erectionCol && foundationCol && (
+            <section>
+              <h4 className="font-bold text-slate-800 text-sm mb-2">Tower Diagram</h4>
+              <div className="overflow-x-auto border border-slate-200 rounded-lg p-3">
+                <table className="border-separate" style={{ borderSpacing: 0 }}>
+                  <tbody>
+                    {([
+                      ['Loc No.',       'loc'],
+                      ['Erection',      'erection'],
+                      ['Foundation',    'foundation'],
+                      ['Type of tower', 'type'],
+                    ] as const).map(([label, rowKey]) => (
+                      <tr key={rowKey}>
+                        <td className="pr-3 text-right text-xs font-bold text-slate-600 whitespace-nowrap sticky left-0 bg-white">
+                          {label}
+                        </td>
+                        {locations.map((loc, i) => (
+                          <Fragment key={loc.id}>
+                            {/* connector column: span on top row, a line across the stage rows */}
+                            {i > 0 && (
+                              <td className="px-1 text-center align-middle min-w-[44px]">
+                                {rowKey === 'loc' && (
+                                  <span className="text-xs font-bold text-slate-600">{loc.span || ''}</span>
+                                )}
+                                {(rowKey === 'erection' || rowKey === 'foundation') && (
+                                  <div className="border-t-2 border-slate-400 w-full" />
+                                )}
+                              </td>
+                            )}
+                            {/* tower column */}
+                            <td className="px-0.5 py-0.5 text-center align-middle">
+                              {rowKey === 'loc' && (
+                                <div className="text-sm font-bold text-slate-900 whitespace-nowrap min-w-[64px]">{loc.locationNo}</div>
+                              )}
+                              {rowKey === 'erection' && (
+                                <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-2 min-w-[64px] ${optionColor(erectionCol, loc[erectionCol.statusField])}`}>
+                                  {loc[erectionCol.statusField] || '—'}
+                                </div>
+                              )}
+                              {rowKey === 'foundation' && (
+                                <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-2 min-w-[64px] ${optionColor(foundationCol, loc[foundationCol.statusField])}`}>
+                                  {loc[foundationCol.statusField] || '—'}
+                                </div>
+                              )}
+                              {rowKey === 'type' && (
+                                <div className="text-xs font-semibold text-slate-700 whitespace-nowrap min-w-[64px]">{loc.towerType}</div>
+                              )}
+                            </td>
+                          </Fragment>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* Billing Summary */}
+          {billedCols.length > 0 && (
+            <section>
+              <h4 className="font-bold text-slate-800 text-sm mb-2">Billing Summary</h4>
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-600">
+                      <th className="px-3 py-2 text-left font-bold" colSpan={2}>Description</th>
+                      {billedCols.map(c => (
+                        <th key={c.key} className="px-3 py-2 text-center font-bold whitespace-nowrap">{c.label.toUpperCase()}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {/* WORKED block */}
+                    <tr className="bg-blue-50/40">
+                      <td className="px-3 py-2 font-bold text-slate-700" rowSpan={3}>WORKED</td>
+                      <td className="px-3 py-2 font-semibold text-slate-700">LOI QTY</td>
+                      {billedCols.map(c => <td key={c.key} className="px-3 py-2 text-center text-slate-700">{total}</td>)}
+                    </tr>
+                    <tr>
+                      <td className="px-3 py-2 font-semibold text-slate-700">COMPLETED</td>
+                      {worked.map((w, i) => <td key={i} className="px-3 py-2 text-center text-emerald-700 font-semibold">{w.completed}</td>)}
+                    </tr>
+                    <tr>
+                      <td className="px-3 py-2 font-semibold text-slate-700">BALANCE</td>
+                      {worked.map((w, i) => <td key={i} className="px-3 py-2 text-center font-bold text-slate-800">{total - w.completed}</td>)}
+                    </tr>
+                    {/* BILLED block */}
+                    {RA_OPTIONS.map((opt, ri) => (
+                      <tr key={opt} className={ri === 0 ? 'border-t-2 border-slate-200' : ''}>
+                        {ri === 0 && <td className="px-3 py-2 font-bold text-slate-700" rowSpan={RA_OPTIONS.length}>BILLED</td>}
+                        <td className="px-3 py-2 font-semibold text-slate-700">{opt}</td>
+                        {raCounts[opt].map((v, i) => <td key={i} className="px-3 py-2 text-center text-slate-700">{v}</td>)}
+                      </tr>
+                    ))}
+                    <tr className="bg-blue-50/40">
+                      <td className="px-3 py-2 font-bold text-slate-700"></td>
+                      <td className="px-3 py-2 font-bold text-slate-800">TOTAL</td>
+                      {totalBilled.map((v, i) => <td key={i} className="px-3 py-2 text-center font-bold text-slate-800">{v}</td>)}
+                    </tr>
+                    <tr>
+                      <td className="px-3 py-2"></td>
+                      <td className="px-3 py-2 font-semibold text-slate-700">BALANCE</td>
+                      {billedCols.map((c, i) => {
+                        const completed = locations.filter(l => c.isCompleted(l[c.statusField])).length
+                        return <td key={c.key} className="px-3 py-2 text-center text-slate-700">{completed - totalBilled[i]}</td>
+                      })}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* Tower Type Summary */}
+          <section>
+            <h4 className="font-bold text-slate-800 text-sm mb-2">Tower Type Summary</h4>
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600">
+                    <th className="px-3 py-2 text-left font-bold">Type</th>
+                    {angles.map(a => <th key={a} className="px-3 py-2 text-center font-bold">{a}°</th>)}
+                    <th className="px-3 py-2 text-center font-bold">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {typeRows.map(r => (
+                    <tr key={r.type}>
+                      <td className="px-3 py-2 font-semibold text-slate-800">{r.type}</td>
+                      {r.counts.map((c, i) => <td key={i} className="px-3 py-2 text-center text-slate-700">{c}</td>)}
+                      <td className="px-3 py-2 text-center font-semibold text-slate-800">{r.rowTotal}</td>
+                    </tr>
+                  ))}
+                  <tr className="bg-slate-50 font-bold">
+                    <td className="px-3 py-2 text-slate-800">Total</td>
+                    {angles.map(a => <td key={a} className="px-3 py-2 text-center text-slate-800">{angleTotals[a]}</td>)}
+                    <td className="px-3 py-2 text-center text-slate-800">{grandTotal}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────
 
 export function WorkLogsView({
@@ -409,6 +688,7 @@ export function WorkLogsView({
   const [showAddLoc, setShowAddLoc]     = useState(false)
   const [editingLoc, setEditingLoc]     = useState<any | null>(null)
   const [showAddLog, setShowAddLog]     = useState(false)
+  const [showDataModal, setShowDataModal] = useState(false)
   const [loading, setLoading]           = useState(false)
   const [cellLoading, setCellLoading]   = useState<string | null>(null)
   const [error, setError]               = useState('')
@@ -501,11 +781,6 @@ export function WorkLogsView({
     window.location.reload()
   }
 
-  const totalLocations = locations.length
-  const opgwCol         = STAGE_COLUMNS[STAGE_COLUMNS.length - 1]
-  const completed        = locations.filter(l => opgwCol.isCompleted(l[opgwCol.statusField])).length
-  const overallPct       = totalLocations > 0 ? Math.round((completed / totalLocations) * 100) : 0
-
   // Span is the distance from the previous tower — only hide the field when adding
   // the very first tower ever (no towers exist yet). Editing always shows it, so an
   // existing span value never gets silently wiped by a form that omits the field.
@@ -517,18 +792,13 @@ export function WorkLogsView({
       {ok    && <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium">✓ {ok}</div>}
       {error && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm font-medium">{error}</div>}
 
-      {/* Overall progress */}
-      {totalLocations > 0 && (
-        <div className="card p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-slate-900 text-sm">Overall Site Progress</h3>
-            <span className="text-slate-600 text-sm font-semibold">{completed}/{totalLocations} completed (OPGW) ({overallPct}%)</span>
-          </div>
-          <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
-            <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${overallPct}%` }} />
-          </div>
-          <StageProgress locations={locations} />
-        </div>
+      {/* Data view modal */}
+      {showDataModal && (
+        <LocationsDataModal
+          locations={locations}
+          siteName={siteName || ''}
+          onClose={() => setShowDataModal(false)}
+        />
       )}
 
       {/* Tab bar */}
@@ -552,9 +822,14 @@ export function WorkLogsView({
 
           <div className="flex justify-end gap-2">
             {locations.length > 0 && (
-              <button onClick={() => exportLocationsToExcel(locations, siteName || '')} className="btn-secondary text-sm">
-                ↓ Download Excel
-              </button>
+              <>
+                <button onClick={() => setShowDataModal(true)} className="btn-secondary text-sm">
+                  👁 View Data
+                </button>
+                <button onClick={() => exportLocationsToExcel(locations, siteName || '')} className="btn-secondary text-sm">
+                  ↓ Download Excel
+                </button>
+              </>
             )}
             <button onClick={() => { setShowAddLoc(true); setEditingLoc(null) }} className="btn text-sm">
               + Add Location
