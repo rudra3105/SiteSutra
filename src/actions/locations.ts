@@ -1,9 +1,9 @@
 'use server'
 // @ts-nocheck
 
-import { db, siteLocations } from '@/lib/db'
+import { db, siteLocations, customBillingOptions } from '@/lib/db'
 import { requireSession } from '@/lib/auth/session'
-import { eq, asc } from 'drizzle-orm'
+import { eq, and, asc, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { STAGE_COLUMNS, stageColumn } from '@/lib/stages'
 
@@ -32,7 +32,7 @@ function buildStageFields(input: Record<string, string | undefined>, existing?: 
 }
 
 // Builds { foundationRa, erectionRa, ... } from a flat { foundation: '1st RA', ... }
-// input — only for stages that carry an raField (Excavation/OPGW aren't billed via RA).
+// input — only for stages that carry an raField (Excavation isn't billed via RA).
 function buildRaFields(input: Record<string, string | undefined>) {
   const out: Record<string, any> = {}
   for (const col of STAGE_COLUMNS) {
@@ -47,7 +47,7 @@ export async function getSiteLocations(siteId: string) {
   if (!session) return []
   return db.select().from(siteLocations)
     .where(eq(siteLocations.siteId, siteId))
-    .orderBy(asc(siteLocations.locationNo))
+    .orderBy(sql`COALESCE(${siteLocations.sortOrder}, 999999999)`, asc(siteLocations.locationNo))
 }
 
 export async function createSiteLocation(data: {
@@ -55,7 +55,9 @@ export async function createSiteLocation(data: {
   locationNo: string
   towerType: string
   span?: string
+  spanRemarks?: string
   notes?: string
+  excludeFromTotal?: boolean
   stages?: Record<string, string | undefined>
   ra?: Record<string, string | undefined>
 }) {
@@ -65,14 +67,21 @@ export async function createSiteLocation(data: {
   if (!data.locationNo?.trim()) return { error: 'Location number is required' }
   if (!data.towerType?.trim()) return { error: 'Tower type is required' }
 
+  const [maxRow] = await db.select({ max: sql<number>`COALESCE(MAX(${siteLocations.sortOrder}), -1)` })
+    .from(siteLocations).where(eq(siteLocations.siteId, data.siteId))
+  const nextOrder = (maxRow?.max ?? -1) + 1
+
   const id = crypto.randomUUID()
   await db.insert(siteLocations).values({
     id,
-    siteId:     data.siteId,
-    locationNo: data.locationNo.trim(),
-    towerType:  data.towerType.trim(),
-    span:       data.span?.trim() || null,
-    notes:      data.notes?.trim() || null,
+    siteId:      data.siteId,
+    locationNo:  data.locationNo.trim(),
+    towerType:   data.towerType.trim(),
+    span:        data.span?.trim() || null,
+    spanRemarks: data.spanRemarks?.trim() || null,
+    notes:       data.notes?.trim() || null,
+    sortOrder:   nextOrder,
+    excludeFromTotal: !!data.excludeFromTotal,
     ...buildStageFields(data.stages || {}),
     ...buildRaFields(data.ra || {}),
   })
@@ -85,7 +94,9 @@ export async function updateSiteLocation(id: string, data: {
   locationNo?: string
   towerType?: string
   span?: string
+  spanRemarks?: string
   notes?: string
+  excludeFromTotal?: boolean
   stages?: Record<string, string | undefined>
   ra?: Record<string, string | undefined>
   siteId: string
@@ -99,8 +110,10 @@ export async function updateSiteLocation(id: string, data: {
     .set({
       ...(data.locationNo && { locationNo: data.locationNo.trim() }),
       ...(data.towerType  && { towerType:  data.towerType.trim()  }),
-      span:      data.span?.trim() || null,
-      notes:     data.notes?.trim() || null,
+      span:        data.span?.trim() || null,
+      spanRemarks: data.spanRemarks?.trim() || null,
+      notes:       data.notes?.trim() || null,
+      excludeFromTotal: !!data.excludeFromTotal,
       ...buildStageFields(data.stages || {}, existing),
       ...buildRaFields(data.ra || {}),
       updatedAt: new Date().toISOString(),
@@ -170,4 +183,77 @@ export async function getSiteLocationStats(siteId: string) {
   const completed = locs.filter((l: any) => opgw.isCompleted(l[opgw.statusField])).length
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
   return { total, byStage, completed, pct }
+}
+
+// ── Custom Billing (RA round) Options ───────────────────────────
+// Fully client-managed — nothing hardcoded. Whatever the client has added
+// (and not deleted) via the Billing Options modal is what populates the
+// per-stage billing dropdowns; a brand-new site starts with none.
+
+export async function getCustomBillingOptions(siteId: string) {
+  const session = await requireSession()
+  if (!session) return []
+
+  return db.select().from(customBillingOptions)
+    .where(eq(customBillingOptions.siteId, siteId))
+    .orderBy(asc(customBillingOptions.name))
+}
+
+export async function createCustomBillingOption(siteId: string, name: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+  if (!name?.trim()) return { error: 'Name required' }
+
+  const trimmed = name.trim()
+  const existingForSite = await db.select().from(customBillingOptions)
+    .where(eq(customBillingOptions.siteId, siteId))
+  const dup = existingForSite.find((o: any) => o.name.toLowerCase() === trimmed.toLowerCase())
+  if (dup) return { success: true, id: dup.id, name: dup.name }
+
+  const id = crypto.randomUUID()
+  await db.insert(customBillingOptions).values({ id, siteId, name: trimmed })
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true, id, name: trimmed }
+}
+
+export async function renameCustomBillingOption(id: string, newName: string, siteId: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+  if (!newName?.trim()) return { error: 'Name required' }
+
+  const [existing] = await db.select().from(customBillingOptions).where(eq(customBillingOptions.id, id))
+  if (!existing) return { error: 'Billing option not found' }
+
+  const name = newName.trim()
+  await db.update(customBillingOptions).set({ name }).where(eq(customBillingOptions.id, id))
+
+  if (existing.name !== name) {
+    const raFields = STAGE_COLUMNS.filter(c => c.raField).map(c => c.raField!)
+    for (const field of raFields) {
+      await db.update(siteLocations).set({ [field]: name })
+        .where(and(eq(siteLocations.siteId, siteId), eq((siteLocations as any)[field], existing.name)))
+    }
+  }
+
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true, name }
+}
+
+export async function deleteCustomBillingOption(id: string, siteId: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+
+  const [existing] = await db.select().from(customBillingOptions).where(eq(customBillingOptions.id, id))
+  await db.delete(customBillingOptions).where(eq(customBillingOptions.id, id))
+
+  if (existing) {
+    const raFields = STAGE_COLUMNS.filter(c => c.raField).map(c => c.raField!)
+    for (const field of raFields) {
+      await db.update(siteLocations).set({ [field]: null })
+        .where(and(eq(siteLocations.siteId, siteId), eq((siteLocations as any)[field], existing.name)))
+    }
+  }
+
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true }
 }

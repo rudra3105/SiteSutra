@@ -1,7 +1,7 @@
 // Shared config for the 7 tower-work stages tracked per site location.
 // Used by both the server actions (locations.ts) and the WorkLogsView UI.
 
-export type StageOption = { value: string; label: string; color: 'green' | 'yellow' | 'red' }
+export type StageOption = { value: string; label: string; color: 'green' | 'yellow' | 'red' | 'purple' }
 
 export type StageColumn = {
   key: string
@@ -11,11 +11,10 @@ export type StageColumn = {
   options: StageOption[]
   isCompleted: (value: string | null | undefined) => boolean
   raField?: string // present only for stages that are billed via RA rounds
+  // 'span' — quantities for this stage (Total/Completed/Balance/Billed) are measured
+  // by summing each tower's span (conductor length) instead of counting towers.
+  measureBy?: 'span'
 }
-
-// Running-Account billing rounds — tracked for Foundation, Erection, Earthing,
-// Tack Welding and Stringing (Excavation and OPGW aren't billed via RA rounds).
-export const RA_OPTIONS = ['1st RA', '2nd RA', '3rd RA', 'Final']
 
 export const STAGE_COLUMNS: StageColumn[] = [
   {
@@ -56,6 +55,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     options: [
       { value: 'COMP', label: 'COMP', color: 'green' },
       { value: 'U/P', label: 'U/P', color: 'yellow' },
+      { value: 'ROW', label: 'ROW', color: 'red' },
+      { value: 'CLEAR', label: 'CLEAR', color: 'purple' },
     ],
     isCompleted: (v) => v === 'COMP',
   },
@@ -89,6 +90,7 @@ export const STAGE_COLUMNS: StageColumn[] = [
     statusField: 'stringingStatus',
     dateField: 'stringingDate',
     raField: 'stringingRa',
+    measureBy: 'span',
     options: [
       { value: 'COMP', label: 'COMP', color: 'green' },
       { value: 'ROW', label: 'ROW', color: 'red' },
@@ -100,6 +102,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     label: 'OPGW',
     statusField: 'opgwStatus',
     dateField: 'opgwDate',
+    raField: 'opgwRa',
+    measureBy: 'span',
     options: [
       { value: 'COMP', label: 'COMP', color: 'green' },
       { value: 'ROW', label: 'ROW', color: 'red' },

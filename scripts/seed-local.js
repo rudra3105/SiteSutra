@@ -115,6 +115,10 @@ async function run() {
       id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')))`,
 
+    `CREATE TABLE IF NOT EXISTS custom_billing_options (
+      id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')))`,
+
     `CREATE TABLE IF NOT EXISTS cashbook_access (
       id TEXT PRIMARY KEY, cashbook_id TEXT NOT NULL, email TEXT NOT NULL,
       name TEXT NOT NULL, password_hash TEXT NOT NULL,
@@ -136,15 +140,15 @@ async function run() {
 
     `CREATE TABLE IF NOT EXISTS site_locations (
       id TEXT PRIMARY KEY, site_id TEXT NOT NULL, location_no TEXT NOT NULL,
-      tower_type TEXT NOT NULL, span TEXT, work_stage TEXT DEFAULT 'FOUNDATION',
-      notes TEXT,
+      tower_type TEXT NOT NULL, span TEXT, span_remarks TEXT, work_stage TEXT DEFAULT 'FOUNDATION',
+      notes TEXT, sort_order INTEGER, exclude_from_total INTEGER NOT NULL DEFAULT 0,
       excavation_status TEXT, excavation_date TEXT,
       foundation_status TEXT, foundation_date TEXT, foundation_ra TEXT,
       erection_status TEXT, erection_date TEXT, erection_ra TEXT,
       earthing_status TEXT, earthing_date TEXT, earthing_ra TEXT,
       tack_welding_status TEXT, tack_welding_date TEXT, tack_welding_ra TEXT,
       stringing_status TEXT, stringing_date TEXT, stringing_ra TEXT,
-      opgw_status TEXT, opgw_date TEXT,
+      opgw_status TEXT, opgw_date TEXT, opgw_ra TEXT,
       created_at TEXT, updated_at TEXT)`,
   ]
 
@@ -175,6 +179,10 @@ async function run() {
     'ALTER TABLE site_locations ADD COLUMN earthing_ra TEXT',
     'ALTER TABLE site_locations ADD COLUMN tack_welding_ra TEXT',
     'ALTER TABLE site_locations ADD COLUMN stringing_ra TEXT',
+    'ALTER TABLE site_locations ADD COLUMN opgw_ra TEXT',
+    'ALTER TABLE site_locations ADD COLUMN span_remarks TEXT',
+    'ALTER TABLE site_locations ADD COLUMN exclude_from_total INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE site_locations ADD COLUMN sort_order INTEGER',
   ]
   for (const sql of migrations) {
     await db.execute(sql).catch(() => {}) // ignore if column already exists
@@ -271,6 +279,50 @@ async function run() {
 
   for (const { sql, args } of inserts) {
     await db.execute({ sql, args })
+  }
+
+  // Explicit display order on site_locations — new locations append last
+  // instead of re-sorting alphabetically by location_no.
+  await db.execute(`
+    UPDATE site_locations
+    SET sort_order = (
+      SELECT rn FROM (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY site_id ORDER BY location_no, id) - 1 AS rn
+        FROM site_locations
+      ) sub WHERE sub.id = site_locations.id
+    )
+    WHERE sort_order IS NULL
+  `).catch(() => {})
+
+  // Custom Billing Options — one-time backfill. Billing-round labels used to
+  // be hardcoded (1st RA, 2nd RA, 3rd RA, Final); they're now fully
+  // client-managed via custom_billing_options, so backfill whatever RA values
+  // a site's locations already have on file, so nothing already in use
+  // silently disappears from the dropdown. Safe to re-run (dedupes per site).
+  const raRows = await db.execute(`
+    SELECT DISTINCT site_id, ra FROM (
+      SELECT site_id, foundation_ra    AS ra FROM site_locations
+      UNION ALL SELECT site_id, erection_ra     FROM site_locations
+      UNION ALL SELECT site_id, earthing_ra     FROM site_locations
+      UNION ALL SELECT site_id, tack_welding_ra FROM site_locations
+      UNION ALL SELECT site_id, stringing_ra    FROM site_locations
+      UNION ALL SELECT site_id, opgw_ra         FROM site_locations
+    ) t
+    WHERE ra IS NOT NULL AND ra != ''
+  `).catch(() => ({ rows: [] }))
+  for (const row of raRows.rows) {
+    const siteId = row.site_id
+    const ra = row.ra
+    const dup = await db.execute({
+      sql: 'SELECT 1 FROM custom_billing_options WHERE site_id = ? AND lower(name) = lower(?)',
+      args: [siteId, ra],
+    })
+    if (dup.rows.length === 0) {
+      await db.execute({
+        sql: 'INSERT INTO custom_billing_options (id, site_id, name) VALUES (?, ?, ?)',
+        args: [require('crypto').randomUUID(), siteId, ra],
+      })
+    }
   }
 
   db.close()

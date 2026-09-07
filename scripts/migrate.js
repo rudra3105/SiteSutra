@@ -60,6 +60,10 @@ async function run() {
     id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     name TEXT NOT NULL, created_at TEXT DEFAULT now())`);
 
+  await client.query(`CREATE TABLE IF NOT EXISTS custom_billing_options (
+    id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, created_at TEXT DEFAULT now())`);
+
   await client.query(`CREATE TABLE IF NOT EXISTS cashbook_access (
     id TEXT PRIMARY KEY, cashbook_id TEXT NOT NULL REFERENCES cashbooks(id) ON DELETE CASCADE,
     email TEXT NOT NULL, name TEXT NOT NULL, password_hash TEXT NOT NULL,
@@ -92,6 +96,52 @@ async function run() {
   await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS stringing_ra TEXT`);
   await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS opgw_status TEXT`);
   await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS opgw_date TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS opgw_ra TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS span_remarks TEXT`);
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS exclude_from_total BOOLEAN NOT NULL DEFAULT false`);
+
+  // ── Explicit display order on site_locations (v9) — new locations append last
+  // instead of re-sorting alphabetically by location_no ────────────────────
+  await client.query(`ALTER TABLE site_locations ADD COLUMN IF NOT EXISTS sort_order INTEGER`);
+  await client.query(`
+    UPDATE site_locations sl
+    SET sort_order = sub.rn
+    FROM (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY site_id ORDER BY location_no, id) - 1 AS rn
+      FROM site_locations
+    ) sub
+    WHERE sl.id = sub.id AND sl.sort_order IS NULL
+  `);
+
+  // ── Custom Billing Options — one-time backfill (v10) ────────
+  // Billing-round labels used to be hardcoded (1st RA, 2nd RA, 3rd RA, Final).
+  // They're now fully client-managed via custom_billing_options; this backfills
+  // whatever RA values a site's locations already have on file, so nothing
+  // already in use silently disappears from the dropdown. Runs once per value —
+  // safe to re-run since it only inserts names not already present for that site.
+  const { rows: raRows } = await client.query(`
+    SELECT DISTINCT site_id, ra FROM (
+      SELECT site_id, foundation_ra    AS ra FROM site_locations
+      UNION ALL SELECT site_id, erection_ra     FROM site_locations
+      UNION ALL SELECT site_id, earthing_ra     FROM site_locations
+      UNION ALL SELECT site_id, tack_welding_ra FROM site_locations
+      UNION ALL SELECT site_id, stringing_ra    FROM site_locations
+      UNION ALL SELECT site_id, opgw_ra         FROM site_locations
+    ) t
+    WHERE ra IS NOT NULL AND ra != ''
+  `);
+  for (const { site_id, ra } of raRows) {
+    const { rows: dup } = await client.query(
+      `SELECT 1 FROM custom_billing_options WHERE site_id = $1 AND lower(name) = lower($2)`,
+      [site_id, ra]
+    );
+    if (dup.length === 0) {
+      await client.query(
+        `INSERT INTO custom_billing_options (id, site_id, name) VALUES ($1, $2, $3)`,
+        [require('crypto').randomUUID(), site_id, ra]
+      );
+    }
+  }
 
   console.log('✅ Tables ready')
 

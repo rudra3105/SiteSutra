@@ -262,8 +262,11 @@ export const siteLocations = sqliteTable('site_locations', {
   locationNo:  text('location_no').notNull(),   // e.g. "T-01", "L-05"
   towerType:   text('tower_type').notNull(),     // e.g. "Tangent", "Angle", "Dead End"
   span:        text('span'),                     // distance from previous tower — blank for first tower
+  spanRemarks: text('span_remarks'),              // remarks about the span/distance
   workStage:   text('work_stage').notNull().default('FOUNDATION'),
-  notes:       text('notes'),
+  notes:       text('notes'),                     // tower remarks
+  sortOrder:   integer('sort_order'),             // display position — new locations go last
+  excludeFromTotal: integer('exclude_from_total', { mode: 'boolean' }).notNull().default(false),
 
   // ── Per-stage status + auto-filled completion date ──────────
   excavationStatus:  text('excavation_status'),   // COMP | U/P | ROW
@@ -285,10 +288,23 @@ export const siteLocations = sqliteTable('site_locations', {
   stringingRa:       text('stringing_ra'),
   opgwStatus:        text('opgw_status'),         // COMP | ROW
   opgwDate:          text('opgw_date'),
+  opgwRa:            text('opgw_ra'),              // 1st RA | 2nd RA | 3rd RA | Final
 
   createdAt:   text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt:   text('updated_at').notNull().default(sql`(datetime('now'))`),
 })
+
+// ── Custom Billing (RA round) Options — per site ────────────────
+// Lets a client add their own RA round labels beyond the built-in
+// 1st/2nd/3rd RA/Final, used in the stage billing dropdowns.
+export const customBillingOptions = sqliteTable('custom_billing_options', {
+  id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  siteId:    text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  name:      text('name').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+})
+
+export type CustomBillingOption = typeof customBillingOptions.$inferSelect
 
 export type SiteLocation = typeof siteLocations.$inferSelect
 
