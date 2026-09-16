@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, Fragment } from 'react'
+import { useState, useRef, useEffect, Fragment } from 'react'
 import {
   createSiteLocation,
   updateSiteLocation,
@@ -11,9 +11,12 @@ import {
   createCustomBillingOption,
   renameCustomBillingOption,
   deleteCustomBillingOption,
+  createCustomStageOption,
+  renameCustomStageOption,
+  deleteCustomStageOption,
 } from '@/actions/locations'
 import { createWorkLog } from '@/actions/worklogs'
-import { STAGE_COLUMNS } from '@/lib/stages'
+import { STAGE_COLUMNS, FIXED_STAGE_OPTIONS } from '@/lib/stages'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -28,7 +31,30 @@ const EMPTY_CLASSES = 'bg-white text-slate-400 border-slate-200'
 function optionColor(col: typeof STAGE_COLUMNS[number], value: string | null | undefined) {
   if (!value) return EMPTY_CLASSES
   const opt = col.options.find(o => o.value === value)
-  return opt ? COLOR_CLASSES[opt.color] : EMPTY_CLASSES
+  // A value that isn't one of the column's built-in options is a custom status
+  // added via "Statuses" — those count as completed (see defaultIsCompleted in
+  // stages.ts), so color them the same green as COMP.
+  return opt ? COLOR_CLASSES[opt.color] : COLOR_CLASSES.green
+}
+
+function escapeHtmlText(s: unknown) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// Inline-CSS equivalent of optionColor()'s Tailwind classes, for the print
+// window (a bare document.write()'d page has no access to the app's stylesheet).
+const PRINT_COLOR_STYLES: Record<string, string> = {
+  green:  'background:#ecfdf5;color:#047857;border:1px solid #6ee7b7;',
+  yellow: 'background:#fffbeb;color:#b45309;border:1px solid #fcd34d;',
+  red:    'background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;',
+  purple: 'background:#faf5ff;color:#7e22ce;border:1px solid #d8b4fe;',
+}
+const PRINT_EMPTY_STYLE = 'background:#fff;color:#94a3b8;border:1px solid #e2e8f0;'
+
+function printColorStyle(col: typeof STAGE_COLUMNS[number], value: string) {
+  if (!value) return PRINT_EMPTY_STYLE
+  const opt = col.options.find(o => o.value === value)
+  return PRINT_COLOR_STYLES[opt ? opt.color : 'green']
 }
 
 // Parses tower-type strings like "PS+0", "PR+6" into a {type, angle} pair for the
@@ -85,8 +111,10 @@ async function exportLocationsToExcel(locations: any[], siteName: string, billin
     for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.statusField] ?? '')
     for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.dateField] ?? '')
     locSheet.addRow(row1Vals)
-    // Row 2: blank Sr/Loc/Type, Span value, blank stage/date cells (kept for the merged look)
-    locSheet.addRow(['', '', '', loc.span ?? ''])
+    // Row 2: blank Sr/Loc/Type, Span value, blank stage/date cells (kept for the merged look).
+    // Span on the NEXT tower describes the span between this tower and the next one, so it's
+    // shown right after this (the first) tower of the pair — matching the Tower Diagram.
+    locSheet.addRow(['', '', '', locations[i + 1]?.span ?? ''])
 
     // Vertically merge Sr No, Loc No, Tower type across the pair of rows
     for (let c = 1; c <= 3; c++) locSheet.mergeCells(r1, c, r2, c)
@@ -312,7 +340,8 @@ async function exportLocationsToExcel(locations: any[], siteName: string, billin
 // ── Sub-components ────────────────────────────────────────────
 
 function StageCell({
-  col, loc, onChange, onChangeRa, loading, raLoading, rowSpan = 1, billingOptions, onAddBillingOption,
+  col, loc, onChange, onChangeRa, loading, raLoading, rowSpan = 1, billingOptions, onAddBillingOption, showBilling = true,
+  extraStatusOptions = [], onAddStatusOption,
 }: {
   col: typeof STAGE_COLUMNS[number]
   loc: any
@@ -323,23 +352,29 @@ function StageCell({
   rowSpan?: number
   billingOptions: string[]
   onAddBillingOption: (stageKey: string) => void
+  showBilling?: boolean
+  extraStatusOptions?: string[]
+  onAddStatusOption?: (stageKey: string) => void
 }) {
   const value = loc[col.statusField] ?? ''
-  const date  = loc[col.dateField] ?? ''
   const ra    = col.raField ? (loc[col.raField] ?? '') : ''
   return (
     <td rowSpan={rowSpan} className="px-1 py-1 align-top text-center border-b border-slate-100">
       <select
         value={value}
         disabled={loading}
-        onChange={(e) => onChange(col.key, e.target.value)}
+        onChange={(e) => {
+          if (e.target.value === '__add__') { onAddStatusOption?.(col.key); return }
+          onChange(col.key, e.target.value)
+        }}
         className={`w-full text-xs font-bold rounded border px-1 py-1 outline-none disabled:opacity-50 text-center ${optionColor(col, value)}`}
       >
         <option value="">—</option>
         {col.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {extraStatusOptions.map(name => <option key={name} value={name}>{name}</option>)}
+        {onAddStatusOption && <option value="__add__">+ Add new...</option>}
       </select>
-      <p className="text-[10px] text-slate-500 mt-0.5 text-center min-h-[14px]">{date || ''}</p>
-      {col.raField && (
+      {col.raField && showBilling && (
         <select
           value={ra}
           disabled={raLoading}
@@ -355,6 +390,249 @@ function StageCell({
         </select>
       )}
     </td>
+  )
+}
+
+// ── Remarks: rich text + photos ──────────────────────────────────
+// Tower Remarks and Span Remarks are stored in the same `notes` / `spanRemarks`
+// text columns as before — no schema change — but now hold a JSON-encoded
+// { html, images } payload instead of a plain string. Older plain-text values
+// (saved before this feature existed) are detected and treated as legacy text.
+
+const REMARK_ALLOWED_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'UL', 'OL', 'LI', 'BR', 'DIV', 'P', 'SPAN'])
+
+// Strips any tag/attribute outside a small allowlist so pasted rich content
+// (which can carry onerror=/script/style payloads) can't execute when the
+// stored HTML is later rendered via dangerouslySetInnerHTML.
+function sanitizeRemarkHtml(html: string): string {
+  if (typeof window === 'undefined' || !html) return ''
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  function clean(node: Node) {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const el = child as HTMLElement
+        if (!REMARK_ALLOWED_TAGS.has(el.tagName)) {
+          node.replaceChild(document.createTextNode(el.textContent || ''), el)
+        } else {
+          for (const attr of Array.from(el.attributes)) el.removeAttribute(attr.name)
+          clean(el)
+        }
+      }
+    }
+  }
+  clean(doc.body)
+  return doc.body.innerHTML
+}
+
+function parseRemark(raw?: string | null): { html: string; images: string[] } {
+  if (!raw) return { html: '', images: [] }
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && ('html' in parsed || 'images' in parsed)) {
+      return { html: parsed.html || '', images: Array.isArray(parsed.images) ? parsed.images : [] }
+    }
+  } catch { /* legacy plain-text value below */ }
+  const escaped = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return { html: escaped, images: [] }
+}
+
+function stripHtml(html: string) {
+  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+// Full-size image viewer with a Download button, opened by clicking a thumbnail
+// instead of navigating to the image URL in a new tab.
+function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  const [downloading, setDownloading] = useState(false)
+
+  async function handleDownload() {
+    setDownloading(true)
+    try {
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = url.split('/').pop()?.split('?')[0] || 'photo'
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(blobUrl)
+    } catch {
+      window.open(url, '_blank')
+    }
+    setDownloading(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/80" onClick={onClose}>
+      <div className="relative max-w-4xl max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <img src={url} alt="Remark attachment" className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-xl" />
+        <div className="absolute top-2 right-2 flex gap-2">
+          <button type="button" onClick={handleDownload} disabled={downloading} title="Download"
+            className="p-2 rounded-lg bg-white/90 hover:bg-white text-slate-700 shadow disabled:opacity-50">
+            {downloading ? (
+              <span className="block w-4 h-4 text-xs font-bold">…</span>
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+              </svg>
+            )}
+          </button>
+          <button type="button" onClick={onClose} title="Close"
+            className="p-2 rounded-lg bg-white/90 hover:bg-white text-slate-700 shadow">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Truncated single-line preview with a "Read more" link that opens the full
+// rich text + photos in a modal. Used for both Tower Remarks and Span Remarks.
+function RemarkPreview({ raw, label }: { raw: string; label: string }) {
+  const [open, setOpen] = useState(false)
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  const { html, images } = parseRemark(raw)
+  const text = stripHtml(html)
+  if (!text && images.length === 0) return <>—</>
+
+  const LIMIT = 18
+  const truncated = text.length > LIMIT ? text.slice(0, LIMIT) + '…' : text
+  const showReadMore = text.length > LIMIT || images.length > 0
+
+  return (
+    <>
+      <span className="inline-flex max-w-full items-baseline gap-1">
+        {text
+          ? <span className="truncate max-w-[110px]">{truncated}</span>
+          : <span className="text-slate-400 italic">📷 Photo</span>}
+        {showReadMore && (
+          <button type="button" onClick={() => setOpen(true)}
+            className="text-orange-600 hover:text-orange-700 font-semibold underline whitespace-nowrap">
+            Read more
+          </button>
+        )}
+      </span>
+      {open && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50" onClick={() => setOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full p-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-bold text-slate-900 text-sm">{label}</h4>
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-700 p-1">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            {text && (
+              <div className="text-slate-700 text-sm leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
+                dangerouslySetInnerHTML={{ __html: sanitizeRemarkHtml(html) }} />
+            )}
+            {images.length > 0 && (
+              <div className={`grid grid-cols-4 gap-3 ${text ? 'mt-4' : ''}`}>
+                {images.map((url, i) => (
+                  <button key={i} type="button" onClick={() => setLightbox(url)} className="block">
+                    <img src={url} alt="Remark attachment" className="w-full h-32 object-cover rounded border border-slate-200 hover:opacity-90 transition-opacity" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {lightbox && <ImageLightbox url={lightbox} onClose={() => setLightbox(null)} />}
+    </>
+  )
+}
+
+// Rich text (bold/italic/underline/bullets) + photo attachments editor for a
+// remarks field. Backs a hidden <input> so it drops into a plain <form>/FormData
+// flow unchanged — the field's value is the JSON-encoded { html, images } string.
+function RemarkEditor({ name, defaultValue, placeholder }: { name: string; defaultValue?: string | null; placeholder?: string }) {
+  const initial = useRef(parseRemark(defaultValue)).current
+  const editorRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [html, setHtml] = useState(initial.html)
+  const [images, setImages] = useState<string[]>(initial.images)
+  const [uploading, setUploading] = useState(false)
+  const [err, setErr] = useState('')
+
+  // Set the starting content imperatively, once, instead of via
+  // dangerouslySetInnerHTML — mixing that prop with contentEditable makes React
+  // fight the live DOM on every re-render (it can reset the text and cursor
+  // position after each keystroke, which looks like typing doesn't work at all).
+  useEffect(() => {
+    if (editorRef.current) editorRef.current.innerHTML = initial.html
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function exec(cmd: string) {
+    editorRef.current?.focus()
+    document.execCommand(cmd)
+    setHtml(editorRef.current?.innerHTML ?? '')
+  }
+
+  // Force plain-text paste so a copy/paste from another page can't smuggle in
+  // markup — formatting is still available via the toolbar buttons above.
+  function handlePaste(e: React.ClipboardEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const text = e.clipboardData.getData('text/plain')
+    document.execCommand('insertText', false, text)
+    setHtml(editorRef.current?.innerHTML ?? '')
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]; if (!file) return
+    setUploading(true); setErr('')
+    const fd = new FormData(); fd.append('file', file)
+    const res = await fetch('/api/upload', { method: 'POST', body: fd })
+    const data = await res.json()
+    setUploading(false)
+    if (fileRef.current) fileRef.current.value = ''
+    if (!res.ok || data.error) { setErr(data.error ?? 'Upload failed'); return }
+    setImages(prev => [...prev, data.url])
+  }
+
+  const value = JSON.stringify({ html: sanitizeRemarkHtml(html), images })
+
+  return (
+    <div>
+      <input type="hidden" name={name} value={value} readOnly />
+      <div className="flex items-center gap-1 border border-slate-200 border-b-0 rounded-t-lg bg-slate-50 px-1.5 py-1">
+        <button type="button" onClick={() => exec('bold')} className="w-6 h-6 rounded text-xs font-bold text-slate-600 hover:bg-slate-200">B</button>
+        <button type="button" onClick={() => exec('italic')} className="w-6 h-6 rounded text-xs italic text-slate-600 hover:bg-slate-200">I</button>
+        <button type="button" onClick={() => exec('underline')} className="w-6 h-6 rounded text-xs underline text-slate-600 hover:bg-slate-200">U</button>
+        <button type="button" onClick={() => exec('insertUnorderedList')} className="px-1.5 h-6 rounded text-xs text-slate-600 hover:bg-slate-200">• List</button>
+        <div className="w-px h-4 bg-slate-300 mx-1" />
+        <label className={`px-1.5 h-6 flex items-center rounded text-xs text-slate-600 hover:bg-slate-200 cursor-pointer ${uploading ? 'opacity-50' : ''}`}>
+          📷 {uploading ? 'Uploading...' : 'Photo'}
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={uploading} />
+        </label>
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={() => setHtml(editorRef.current?.innerHTML ?? '')}
+        onPaste={handlePaste}
+        className="input rounded-t-none min-h-[64px] empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
+        data-placeholder={placeholder}
+      />
+      {err && <p className="text-red-600 text-xs mt-1">{err}</p>}
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {images.map((url, i) => (
+            <div key={i} className="relative">
+              <img src={url} alt="Attachment" className="w-14 h-14 object-cover rounded border border-slate-200" />
+              <button type="button" onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}
+                className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white rounded-full text-[10px] leading-4">×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -388,19 +666,70 @@ function WorkLogBar({ logs }: { logs: any[] }) {
 }
 
 // ── Data view modal: same data as the Excel export, on-screen ─────────────
+// Clicking a non-zero Billing Summary count (in the View Data modal) filters the
+// main Locations table on the page to just the towers that make up that number —
+// the modal itself always shows the full, unfiltered data.
+type BillingFilter = {
+  colKey: string
+  kind: 'loi' | 'completed' | 'balance' | 'ra' | 'billedTotal' | 'billedBalance'
+  raOption?: string
+  label: string
+}
+
+function sameBillingFilter(a: BillingFilter | null, b: BillingFilter): boolean {
+  return !!a && a.kind === b.kind && a.colKey === b.colKey && a.raOption === b.raOption
+}
+
+function matchesBillingFilter(filter: BillingFilter, l: any): boolean {
+  if (l.excludeFromTotal) return false
+  const col = STAGE_COLUMNS.find(c => c.key === filter.colKey)
+  if (!col) return true
+  const status = l[col.statusField]
+  const raVal  = col.raField ? (l[col.raField] ?? '') : ''
+  switch (filter.kind) {
+    case 'loi':           return true
+    case 'completed':     return col.isCompleted(status)
+    case 'balance':       return !col.isCompleted(status)
+    case 'ra':            return raVal === filter.raOption
+    case 'billedTotal':   return !!raVal
+    case 'billedBalance': return col.isCompleted(status) && !raVal
+    default:              return true
+  }
+}
+
 function LocationsDataModal({
-  locations, siteName, onClose, billingOptions,
+  locations, siteName, onClose, billingOptions, activeFilter, onSelectFilter,
 }: {
   locations: any[]
   siteName: string
   onClose: () => void
   billingOptions: string[]
+  activeFilter: BillingFilter | null
+  onSelectFilter: (f: BillingFilter) => void
 }) {
   // Towers marked "Don't include in total towers" are excluded from every
   // count/summary below (Progress Summary, Billing Summary, Tower Type Summary) —
   // they still appear in the Locations table.
   const counted = locations.filter(l => !l.excludeFromTotal)
   const billedCols = STAGE_COLUMNS.filter(c => c.raField)
+
+  // Renders a Billing Summary count as a clickable filter toggle — 0 stays plain text.
+  function CountCell({ value, className = 'text-slate-700', filterProps }: {
+    value: number
+    className?: string
+    filterProps: BillingFilter
+  }) {
+    if (!value) return <td className={`px-3 py-2 text-center ${className}`}>{value}</td>
+    const active = sameBillingFilter(activeFilter, filterProps)
+    return (
+      <td className="px-3 py-2 text-center">
+        <button type="button" onClick={() => onSelectFilter(filterProps)}
+          className={`${className} hover:underline hover:text-orange-600 cursor-pointer ${active ? 'text-orange-600 underline' : ''}`}>
+          {value}
+        </button>
+      </td>
+    )
+  }
 
   // Progress Summary (mirrors "Progress Summary" sheet). Stringing/OPGW rows are
   // measured in total span (conductor length) completed, not tower count — see stageQty().
@@ -454,7 +783,9 @@ function LocationsDataModal({
 
         <div className="p-5 space-y-6">
 
-          {/* Locations (full detail — mirrors "Locations" sheet) */}
+          {/* Locations (full detail — mirrors "Locations" sheet) — always shows every
+              tower; Billing Summary counts below filter the page's Locations table
+              instead of this one. */}
           <section>
             <h4 className="font-bold text-slate-800 text-sm mb-2">Locations</h4>
             <div className="overflow-x-auto border border-slate-200 rounded-lg">
@@ -468,14 +799,16 @@ function LocationsDataModal({
                     {STAGE_COLUMNS.map(col => (
                       <th key={col.key} className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">{col.label}</th>
                     ))}
-                    {STAGE_COLUMNS.map(col => (
-                      <th key={`${col.key}-d`} className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">{col.label} Date</th>
-                    ))}
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Remarks</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {locations.map((loc, i) => (
+                  {locations.map((loc, i) => {
+                    // Span/spanRemarks on the NEXT tower describe the span between this
+                    // tower and the next one, so the connector row is shown right after
+                    // this (the first) tower of the pair — matching the Tower Diagram.
+                    const nextLoc = locations[i + 1]
+                    return (
                     <Fragment key={loc.id}>
                       {/* Main row — tower's own data, plus Tower Remarks */}
                       <tr>
@@ -485,44 +818,45 @@ function LocationsDataModal({
                         <td className="px-2 py-2 text-center text-slate-300">—</td>
                         {STAGE_COLUMNS.map(col => {
                           const value = loc[col.statusField] ?? ''
+                          const date  = loc[col.dateField] ?? ''
                           return (
                             <td key={col.key} className="px-1 py-1 text-center">
                               <span className={`inline-block w-full font-bold rounded border px-1.5 py-1 ${optionColor(col, value)}`}>
                                 {value || '—'}
                               </span>
+                              <p className="text-[10px] text-slate-500 mt-0.5 text-center min-h-[14px]">{date || ''}</p>
                             </td>
                           )
                         })}
-                        {STAGE_COLUMNS.map(col => (
-                          <td key={`${col.key}-d`} className="px-2 py-2 text-center text-slate-500 whitespace-nowrap">
-                            {loc[col.dateField] || '—'}
-                          </td>
-                        ))}
-                        <td className="px-2 py-2 text-center text-slate-700">{loc.notes || '—'}</td>
+                        <td className="px-2 py-2 text-center text-slate-700"><RemarkPreview raw={loc.notes} label="Tower Remarks" /></td>
                       </tr>
                       {/* Extra row — otherwise empty, carrying only the Span value and
-                          Span Remarks (distance from the previous tower) */}
-                      <tr className="bg-slate-50/50">
-                        <td />
-                        <td />
-                        <td />
-                        <td className="px-2 py-2 text-center text-slate-700 font-semibold">{i === 0 ? '—' : (loc.span || '—')}</td>
-                        {STAGE_COLUMNS.map(col => <td key={col.key} />)}
-                        {STAGE_COLUMNS.map(col => <td key={`${col.key}-d`} />)}
-                        <td className="px-2 py-2 text-center text-slate-500">{i === 0 ? '—' : (loc.spanRemarks || '—')}</td>
-                      </tr>
+                          Span Remarks for the span leading to the next tower */}
+                      {nextLoc && (
+                        <tr className="bg-slate-50/50 text-[11px] leading-tight">
+                          <td />
+                          <td />
+                          <td />
+                          <td className="px-2 py-0.5 text-center text-slate-700 font-semibold">{nextLoc.span || '—'}</td>
+                          {STAGE_COLUMNS.map(col => <td key={col.key} />)}
+                          <td className="px-2 py-0.5 text-center text-slate-500"><RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks" /></td>
+                        </tr>
+                      )}
                     </Fragment>
-                  ))}
-                  {/* Totals row: span sum + per-stage completed count */}
+                    )
+                  })}
+                  {/* Totals row: span sum + per-stage completed count — excludes towers
+                      marked "Don't include in total towers", same as the summaries below.
+                      Stringing/OPGW are measured in total span (conductor length)
+                      completed, not tower count — see stageQty(). */}
                   <tr className="bg-slate-50 font-bold text-slate-800">
                     <td className="px-2 py-2 text-center" colSpan={3}>Total</td>
-                    <td className="px-2 py-2 text-center">{locations.reduce((s, l) => s + (Number(l.span) || 0), 0)}</td>
+                    <td className="px-2 py-2 text-center">{counted.reduce((s, l) => s + (Number(l.span) || 0), 0)}</td>
                     {STAGE_COLUMNS.map(col => (
                       <td key={col.key} className="px-2 py-2 text-center">
-                        {locations.filter(l => col.isCompleted(l[col.statusField])).length}
+                        {stageQty(col, counted.filter(l => col.isCompleted(l[col.statusField])))}
                       </td>
                     ))}
-                    {STAGE_COLUMNS.map(col => <td key={`${col.key}-d`} className="px-2 py-2" />)}
                     <td className="px-2 py-2" />
                   </tr>
                 </tbody>
@@ -573,44 +907,68 @@ function LocationsDataModal({
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {/* WORKED block */}
-                    <tr className="bg-blue-50/40">
+                  {/* WORKED block — its own bordered tbody, separated from BILLED by a gap */}
+                  <tbody className="divide-y divide-slate-100 border border-slate-200">
+                    <tr>
                       <td className="px-3 py-2 font-bold text-slate-700" rowSpan={3}>WORKED</td>
                       <td className="px-3 py-2 font-semibold text-slate-700">LOI QTY</td>
-                      {workedTotals.map((t, i) => <td key={i} className="px-3 py-2 text-center text-slate-700">{t}</td>)}
+                      {billedCols.map((c, i) => (
+                        <CountCell key={c.key} value={workedTotals[i]}
+                          filterProps={{ colKey: c.key, kind: 'loi', label: `${c.label} — LOI Qty` }} />
+                      ))}
                     </tr>
                     <tr>
                       <td className="px-3 py-2 font-semibold text-slate-700">COMPLETED</td>
-                      {worked.map((w, i) => <td key={i} className="px-3 py-2 text-center text-emerald-700 font-semibold">{w.completed}</td>)}
+                      {billedCols.map((c, i) => (
+                        <CountCell key={c.key} value={worked[i].completed} className="text-emerald-700 font-semibold"
+                          filterProps={{ colKey: c.key, kind: 'completed', label: `${c.label} — Completed` }} />
+                      ))}
                     </tr>
                     <tr>
                       <td className="px-3 py-2 font-semibold text-slate-700">BALANCE</td>
-                      {worked.map((w, i) => <td key={i} className="px-3 py-2 text-center font-bold text-slate-800">{workedTotals[i] - w.completed}</td>)}
+                      {billedCols.map((c, i) => (
+                        <CountCell key={c.key} value={workedTotals[i] - worked[i].completed} className="font-bold text-slate-800"
+                          filterProps={{ colKey: c.key, kind: 'balance', label: `${c.label} — Balance (not yet done)` }} />
+                      ))}
                     </tr>
-                    {/* BILLED block */}
+                  </tbody>
+
+                  {/* Gap between WORKED and BILLED — a blank spacer row */}
+                  <tbody>
+                    <tr><td colSpan={billedCols.length + 2} className="h-3 p-0 border-0 bg-white" /></tr>
+                  </tbody>
+
+                  {/* BILLED block — its own bordered tbody */}
+                  <tbody className="divide-y divide-slate-100 border border-slate-200">
                     {billingOptions.length === 0 ? (
-                      <tr className="border-t-2 border-slate-200">
+                      <tr>
                         <td className="px-3 py-2 font-bold text-slate-700">BILLED</td>
                         <td className="px-3 py-2 text-slate-400 italic text-sm" colSpan={billedCols.length + 1}>No billing options yet</td>
                       </tr>
                     ) : billingOptions.map((opt, ri) => (
-                      <tr key={opt} className={ri === 0 ? 'border-t-2 border-slate-200' : ''}>
+                      <tr key={opt}>
                         {ri === 0 && <td className="px-3 py-2 font-bold text-slate-700" rowSpan={billingOptions.length}>BILLED</td>}
                         <td className="px-3 py-2 font-semibold text-slate-700">{opt}</td>
-                        {raCounts[opt].map((v, i) => <td key={i} className="px-3 py-2 text-center text-slate-700">{v}</td>)}
+                        {billedCols.map((c, i) => (
+                          <CountCell key={c.key} value={raCounts[opt][i]}
+                            filterProps={{ colKey: c.key, kind: 'ra', raOption: opt, label: `${c.label} — ${opt}` }} />
+                        ))}
                       </tr>
                     ))}
-                    <tr className="bg-blue-50/40">
+                    <tr>
                       <td className="px-3 py-2 font-bold text-slate-700"></td>
                       <td className="px-3 py-2 font-bold text-slate-800">TOTAL</td>
-                      {totalBilled.map((v, i) => <td key={i} className="px-3 py-2 text-center font-bold text-slate-800">{v}</td>)}
+                      {billedCols.map((c, i) => (
+                        <CountCell key={c.key} value={totalBilled[i]} className="font-bold text-slate-800"
+                          filterProps={{ colKey: c.key, kind: 'billedTotal', label: `${c.label} — Billed Total` }} />
+                      ))}
                     </tr>
                     <tr>
                       <td className="px-3 py-2"></td>
                       <td className="px-3 py-2 font-semibold text-slate-700">BALANCE</td>
                       {billedCols.map((c, i) => (
-                        <td key={c.key} className="px-3 py-2 text-center text-slate-700">{worked[i].completed - totalBilled[i]}</td>
+                        <CountCell key={c.key} value={worked[i].completed - totalBilled[i]}
+                          filterProps={{ colKey: c.key, kind: 'billedBalance', label: `${c.label} — Completed but not yet billed` }} />
                       ))}
                     </tr>
                   </tbody>
@@ -821,6 +1179,149 @@ function BillingOptionsModal({
   )
 }
 
+// ── Manage custom stage status options: add, rename, delete ─────────────────
+// The fixed COMP/U-P/CLEAR/ROW set (plus each column's own built-in extras,
+// e.g. Foundation's SR/PSNS/...) always shows first in the dropdown and can't
+// be renamed or removed here — only the site's own added values can.
+function StatusOptionsModal({
+  stageKey, onStageKeyChange, options, onClose, onAdd, onRename, onDelete, onApply,
+}: {
+  stageKey: string
+  onStageKeyChange?: (key: string) => void
+  options: { id: string; name: string }[]
+  onClose: () => void
+  onAdd: (stageKey: string, name: string) => Promise<{ id: string; name: string } | null>
+  onRename: (id: string, name: string) => Promise<void>
+  onDelete: (id: string, name: string) => Promise<void>
+  onApply?: (name: string) => void
+}) {
+  const [name, setName]         = useState('')
+  const [saving, setSaving]     = useState(false)
+  const [error, setError]       = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [busyId, setBusyId]     = useState<string | null>(null)
+
+  const colLabel = STAGE_COLUMNS.find(c => c.key === stageKey)?.label ?? stageKey
+  const fixedLabels = FIXED_STAGE_OPTIONS.map(o => o.label).join(', ')
+
+  async function handleSave(keepOpen: boolean) {
+    if (!name.trim()) { setError('Enter a name'); return }
+    setSaving(true); setError('')
+    const result = await onAdd(stageKey, name.trim())
+    setSaving(false)
+    if (!result) { setError('Could not add that status'); return }
+    onApply?.(result.name)
+    setName('')
+    if (!keepOpen) onClose()
+  }
+
+  async function handleRenameSave(id: string) {
+    if (!editValue.trim()) { setEditingId(null); return }
+    setBusyId(id)
+    await onRename(id, editValue.trim())
+    setBusyId(null); setEditingId(null)
+  }
+
+  async function handleDelete(id: string, optName: string) {
+    if (!confirm(`Delete status "${optName}"? This clears it from any ${colLabel} cell currently using it.`)) return
+    setBusyId(id)
+    await onDelete(id, optName)
+    setBusyId(null)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 sticky top-0 bg-white">
+          <h3 className="font-bold text-slate-900">Manage Statuses</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {onStageKeyChange ? (
+            <div>
+              <label className="label">Column</label>
+              <select className="select" value={stageKey} onChange={(e) => onStageKeyChange(e.target.value)}>
+                {STAGE_COLUMNS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Column: <span className="font-semibold text-slate-700">{colLabel}</span></p>
+          )}
+
+          <p className="text-xs text-slate-500">Fixed statuses (always available, can't be edited here): <span className="font-semibold text-slate-700">{fixedLabels}</span></p>
+
+          <div>
+            <p className="text-xs font-semibold text-slate-500 mb-1.5">Added Statuses — {colLabel}</p>
+            {options.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">No extra statuses added for this column yet</p>
+            ) : (
+              <div className="space-y-1.5">
+                {options.map(o => editingId === o.id ? (
+                  <div key={o.id} className="flex items-center gap-1.5">
+                    <input autoFocus className="input flex-1 text-sm py-1.5"
+                      value={editValue} onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleRenameSave(o.id); if (e.key === 'Escape') setEditingId(null) }} />
+                    <button type="button" onClick={() => handleRenameSave(o.id)} disabled={busyId === o.id}
+                      className="text-xs px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50">✓</button>
+                    <button type="button" onClick={() => setEditingId(null)}
+                      className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500">✕</button>
+                  </div>
+                ) : (
+                  <div key={o.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200">
+                    <span className="text-sm text-slate-800">{o.name}</span>
+                    <div className="flex items-center gap-1">
+                      <button type="button" title="Rename" disabled={busyId === o.id}
+                        onClick={() => { setEditingId(o.id); setEditValue(o.name) }}
+                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button type="button" title="Delete" disabled={busyId === o.id}
+                        onClick={() => handleDelete(o.id, o.name)}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="label">Add New — {colLabel}</label>
+            <input className="input" placeholder='e.g. "HOLD"' value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSave(false) }} />
+            {error && <p className="text-red-600 text-xs mt-1">{error}</p>}
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-5 pb-5">
+          <button type="button" onClick={onClose} className="btn-secondary flex-1">Close</button>
+          <button type="button" onClick={() => handleSave(true)} disabled={saving}
+            className="btn-secondary flex-1 disabled:opacity-60">
+            {saving ? 'Saving...' : 'Save & Add Another'}
+          </button>
+          <button type="button" onClick={() => handleSave(false)} disabled={saving}
+            className="btn flex-1 disabled:opacity-60">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────
 
 export function WorkLogsView({
@@ -830,6 +1331,8 @@ export function WorkLogsView({
   workTypes,
   initialLocations,
   initialBillingOptions,
+  initialStageOptions,
+  isAdmin = true,
 }: {
   siteId: string
   siteName?: string
@@ -837,13 +1340,21 @@ export function WorkLogsView({
   workTypes: any[]
   initialLocations: any[]
   initialBillingOptions?: any[]
+  initialStageOptions?: any[]
+  isAdmin?: boolean
 }) {
   const [locations, setLocations]       = useState<any[]>(initialLocations)
   const [activeTab, setActiveTab]       = useState<'locations' | 'diagram' | 'logs'>('locations')
   const [showAddLoc, setShowAddLoc]     = useState(false)
   const [editingLoc, setEditingLoc]     = useState<any | null>(null)
+  // Bumped on "Save & Add Another" to force the RemarkEditor fields (rich text
+  // + photos aren't native form controls, so form.reset() alone can't clear them).
+  const [formKey, setFormKey]           = useState(0)
   const [showAddLog, setShowAddLog]     = useState(false)
   const [showDataModal, setShowDataModal] = useState(false)
+  // Set by clicking a Billing Summary count in the View Data modal — filters the
+  // Locations table below instead of the modal itself.
+  const [locFilter, setLocFilter]       = useState<BillingFilter | null>(null)
   const [loading, setLoading]           = useState(false)
   const [cellLoading, setCellLoading]   = useState<string | null>(null)
   const [error, setError]               = useState('')
@@ -856,7 +1367,91 @@ export function WorkLogsView({
   // saved via the Billing Options modal. Nothing is hardcoded here.
   const billingOptions = customBillingOpts.map(o => o.name)
 
+  // Custom per-column stage statuses, added on top of the fixed COMP/U-P/CLEAR/ROW
+  // set (see FIXED_STAGE_OPTIONS in stages.ts) the same way billing options work.
+  const [customStageOpts, setCustomStageOpts] = useState<{ id: string; stageKey: string; name: string }[]>(initialStageOptions ?? [])
+  const [statusModalOpen, setStatusModalOpen] = useState(false)
+  const [statusModalStageKey, setStatusModalStageKey] = useState<string>(STAGE_COLUMNS[0].key)
+  const [statusPending, setStatusPending]     = useState<{ locId: string; stageKey: string } | null>(null)
+
+  function customStatusNames(stageKey: string) {
+    return customStageOpts.filter(o => o.stageKey === stageKey).map(o => o.name)
+  }
+
   function flash(msg: string) { setOk(msg); setTimeout(() => setOk(''), 3000) }
+
+  // Clicking a Billing Summary count closes the View Data modal and filters the
+  // Locations table to just the matching towers. Clicking the same (active) count
+  // again clears the filter instead of re-applying it.
+  function handleSelectLocFilter(next: BillingFilter) {
+    setLocFilter(prev => sameBillingFilter(prev, next) ? null : next)
+    setShowDataModal(false)
+  }
+
+  const displayedLocations = locFilter ? locations.filter(l => matchesBillingFilter(locFilter, l)) : locations
+
+  // Prints the currently filtered Locations list in a standalone window — same
+  // columns/status-chip look as the on-screen table, minus the billing (RA)
+  // dropdown and the Actions column, since those aren't meaningful on paper.
+  function handlePrintFiltered() {
+    const win = window.open('', '_blank', 'width=1100,height=800')
+    if (!win) return
+
+    const headerCells = STAGE_COLUMNS.map(col =>
+      `<th style="padding:6px 8px;text-align:center;">${escapeHtmlText(col.label)}</th>`).join('')
+
+    const rows = displayedLocations.map(loc => {
+      const stageCells = STAGE_COLUMNS.map(col => {
+        const value = loc[col.statusField] || ''
+        return `<td style="padding:6px 8px;text-align:center;">
+          <span style="display:inline-block;min-width:56px;padding:3px 8px;border-radius:4px;font-weight:700;font-size:11px;${printColorStyle(col, value)}">
+            ${escapeHtmlText(value || '—')}
+          </span>
+        </td>`
+      }).join('')
+      const remarksText = stripHtml(parseRemark(loc.notes).html) || '—'
+      return `<tr>
+        <td style="padding:6px 8px;font-weight:700;white-space:nowrap;">${escapeHtmlText(loc.locationNo)}</td>
+        <td style="padding:6px 8px;white-space:nowrap;">${escapeHtmlText(loc.towerType)}</td>
+        <td style="padding:6px 8px;text-align:center;color:#cbd5e1;">—</td>
+        ${stageCells}
+        <td style="padding:6px 8px;">${escapeHtmlText(remarksText)}</td>
+      </tr>`
+    }).join('')
+
+    win.document.write(`<!DOCTYPE html>
+      <html>
+      <head>
+        <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
+        <style>
+          body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
+          h1 { font-size: 16px; margin: 0 0 4px; }
+          p.sub { font-size: 12px; color: #64748b; margin: 0 0 16px; }
+          table { border-collapse: collapse; width: 100%; font-size: 12px; }
+          th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 10px; color: #475569; }
+          td { border-bottom: 1px solid #f1f5f9; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <h1>${escapeHtmlText(siteName || 'Site')} — Locations</h1>
+        <p class="sub">${locFilter ? escapeHtmlText(locFilter.label) + ' — ' : ''}${displayedLocations.length} tower${displayedLocations.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <table>
+          <thead><tr>
+            <th style="padding:6px 8px;text-align:left;">Location</th>
+            <th style="padding:6px 8px;text-align:left;">Type</th>
+            <th style="padding:6px 8px;">Span</th>
+            ${headerCells}
+            <th style="padding:6px 8px;text-align:left;">Remarks</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </body>
+      </html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { try { win.print() } catch { /* user can print manually */ } }, 300)
+  }
 
   // ── Manage custom billing options (add / rename / delete) ───────────────
   function openBillingModal(locId?: string, stageKey?: string) {
@@ -893,6 +1488,42 @@ export function WorkLogsView({
     if (billingPending) handleRaChange(billingPending.locId, billingPending.stageKey, name)
   }
 
+  // ── Manage custom stage status options (add / rename / delete) ──────────
+  function openStatusModal(stageKey: string, locId?: string) {
+    setStatusModalStageKey(stageKey)
+    setStatusPending(locId ? { locId, stageKey } : null)
+    setStatusModalOpen(true)
+  }
+
+  async function handleCreateStatusOption(stageKey: string, name: string) {
+    const result: any = await createCustomStageOption(siteId, stageKey, name)
+    if (result?.error) { setError(result.error); return null }
+    setCustomStageOpts(prev => prev.some(o => o.stageKey === stageKey && o.name.toLowerCase() === result.name.toLowerCase())
+      ? prev
+      : [...prev, { id: result.id, stageKey, name: result.name }])
+    return { id: result.id, name: result.name }
+  }
+
+  async function handleRenameStatusOption(id: string, newName: string) {
+    const result: any = await renameCustomStageOption(id, newName, siteId)
+    if (result?.error) { setError(result.error); return }
+    setCustomStageOpts(prev => prev.map(o => o.id === id ? { ...o, name: result.name } : o))
+    const fresh = await getSiteLocations(siteId)
+    setLocations(fresh)
+  }
+
+  async function handleDeleteStatusOption(id: string) {
+    const result: any = await deleteCustomStageOption(id, siteId)
+    if (result?.error) { setError(result.error); return }
+    setCustomStageOpts(prev => prev.filter(o => o.id !== id))
+    const fresh = await getSiteLocations(siteId)
+    setLocations(fresh)
+  }
+
+  function handleApplyStatusOption(name: string) {
+    if (statusPending) handleStageChange(statusPending.locId, statusPending.stageKey, name)
+  }
+
   // ── Add / Edit Location ─────────────────────────────────────
   async function handleSaveLocation(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setLoading(true); setError('')
@@ -905,16 +1536,22 @@ export function WorkLogsView({
     const ra: Record<string, string> = {}
     for (const col of STAGE_COLUMNS) if (col.raField) ra[col.key] = (fd.get(`ra_${col.key}`) as string) || ''
 
-    const data = {
+    const data: any = {
       siteId,
       locationNo:  fd.get('locationNo') as string,
       towerType:   fd.get('towerType')  as string,
-      span:        (fd.get('span') as string) || '',
-      spanRemarks: fd.get('spanRemarks') as string,
       notes:       fd.get('notes') as string,
       excludeFromTotal: fd.get('excludeFromTotal') === 'on',
       stages,
       ra,
+    }
+    // The Span / Span Remarks fields aren't rendered for the first tower in the
+    // sequence (see isFirstEntry below) — leave them out of the payload entirely
+    // rather than submitting them empty, so any legacy value on that tower's row
+    // is left untouched rather than wiped.
+    if (!isFirstEntry) {
+      data.span = (fd.get('span') as string) || ''
+      data.spanRemarks = fd.get('spanRemarks') as string
     }
 
     let result: any
@@ -932,6 +1569,7 @@ export function WorkLogsView({
     if (keepOpen && !editingLoc) {
       flash('Location added!')
       form.reset()
+      setFormKey(k => k + 1)
       return
     }
 
@@ -991,10 +1629,13 @@ export function WorkLogsView({
     window.location.reload()
   }
 
-  // Span is the distance from the previous tower — only hide the field when adding
-  // the very first tower ever (no towers exist yet). Editing always shows it, so an
-  // existing span value never gets silently wiped by a form that omits the field.
-  const isFirstEntry = !editingLoc && locations.length === 0
+  // Span is the distance from the previous tower, so the first tower in the
+  // sequence has none to enter — hide the field whether adding the very first
+  // tower ever or editing whichever tower currently sits first. (Its value would
+  // never be shown anywhere: the connector row for a gap always renders under the
+  // tower BEFORE the gap, using the tower AFTER it's span — see the locations
+  // table below — so the first tower is never anyone's "next".)
+  const isFirstEntry = editingLoc ? locations[0]?.id === editingLoc.id : locations.length === 0
 
   return (
     <div className="space-y-5">
@@ -1009,6 +1650,8 @@ export function WorkLogsView({
           siteName={siteName || ''}
           onClose={() => setShowDataModal(false)}
           billingOptions={billingOptions}
+          activeFilter={locFilter}
+          onSelectFilter={handleSelectLocFilter}
         />
       )}
 
@@ -1021,6 +1664,20 @@ export function WorkLogsView({
           onRename={handleRenameBillingOption}
           onDelete={handleDeleteBillingOption}
           onApply={handleApplyBillingOption}
+        />
+      )}
+
+      {/* Stage status options modal */}
+      {statusModalOpen && (
+        <StatusOptionsModal
+          stageKey={statusModalStageKey}
+          onStageKeyChange={statusPending ? undefined : setStatusModalStageKey}
+          options={customStageOpts.filter(o => o.stageKey === statusModalStageKey).map(o => ({ id: o.id, name: o.name }))}
+          onClose={() => { setStatusModalOpen(false); setStatusPending(null) }}
+          onAdd={handleCreateStatusOption}
+          onRename={handleRenameStatusOption}
+          onDelete={handleDeleteStatusOption}
+          onApply={handleApplyStatusOption}
         />
       )}
 
@@ -1055,16 +1712,41 @@ export function WorkLogsView({
                 </button>
               </>
             )}
-            <button onClick={() => openBillingModal()} className="btn-secondary text-sm">
-              ⚙ Billing Options
+            {isAdmin && (
+              <button onClick={() => openBillingModal()} className="btn-secondary text-sm">
+                ⚙ Billing Options
+              </button>
+            )}
+            <button onClick={() => openStatusModal(statusModalStageKey)} className="btn-secondary text-sm">
+              ⚙ Statuses
             </button>
-            <button onClick={() => { setShowAddLoc(true); setEditingLoc(null) }} className="btn text-sm">
-              + Add Location
-            </button>
+            {isAdmin && (
+              <button onClick={() => { setShowAddLoc(true); setEditingLoc(null) }} className="btn text-sm">
+                + Add Location
+              </button>
+            )}
           </div>
 
+          {/* Active Billing Summary filter, set from the View Data modal */}
+          {locFilter && (
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-orange-50 border border-orange-200 rounded-xl px-4 py-3">
+              <span className="text-orange-700 font-semibold text-sm">
+                Filtered: {locFilter.label}{' '}
+                <span className="text-orange-500 font-normal">({displayedLocations.length})</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={handlePrintFiltered} className="btn-secondary text-sm">
+                  🖨 Print
+                </button>
+                <button type="button" onClick={() => setLocFilter(null)} className="btn-secondary text-sm">
+                  ✕ Reset Filter
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Add / Edit form */}
-          {(showAddLoc || editingLoc) && (
+          {isAdmin && (showAddLoc || editingLoc) && (
             <form onSubmit={handleSaveLocation} className="card p-5 border-2 border-orange-200 space-y-4">
               <h3 className="font-bold text-slate-900">
                 {editingLoc ? `Edit — ${editingLoc.locationNo}` : 'Add New Location'}
@@ -1086,7 +1768,7 @@ export function WorkLogsView({
               </div>
 
               {!isFirstEntry && (
-                <div className="grid grid-cols-2 gap-3">
+                <>
                   <div>
                     <label className="label">Span</label>
                     <input name="span" className="input"
@@ -1096,11 +1778,11 @@ export function WorkLogsView({
                   </div>
                   <div>
                     <label className="label">Span Remarks</label>
-                    <input name="spanRemarks" className="input"
-                      defaultValue={editingLoc?.spanRemarks ?? ''}
+                    <RemarkEditor key={`span-${editingLoc?.id ?? 'new'}-${formKey}`}
+                      name="spanRemarks" defaultValue={editingLoc?.spanRemarks}
                       placeholder="Any remarks about this span..." />
                   </div>
-                </div>
+                </>
               )}
               {isFirstEntry && (
                 <p className="text-slate-500 text-xs">This is the first tower in the sequence — no span to enter.</p>
@@ -1108,8 +1790,8 @@ export function WorkLogsView({
 
               <div>
                 <label className="label">Tower Remarks</label>
-                <input name="notes" className="input"
-                  defaultValue={editingLoc?.notes ?? ''}
+                <RemarkEditor key={`notes-${editingLoc?.id ?? 'new'}-${formKey}`}
+                  name="notes" defaultValue={editingLoc?.notes}
                   placeholder="Any additional remarks..." />
               </div>
 
@@ -1148,7 +1830,15 @@ export function WorkLogsView({
               <p className="text-slate-500 text-sm mb-4">
                 Add tower locations in sequence — span, stage status and completion dates are tracked per tower
               </p>
-              <button onClick={() => setShowAddLoc(true)} className="btn">Add First Location</button>
+              {isAdmin && (
+                <button onClick={() => setShowAddLoc(true)} className="btn">Add First Location</button>
+              )}
+            </div>
+          ) : displayedLocations.length === 0 ? (
+            <div className="card p-10 text-center">
+              <p className="text-slate-700 font-bold mb-1">No towers match this filter</p>
+              <p className="text-slate-500 text-sm mb-4">Try a different Billing Summary count, or clear the filter.</p>
+              <button onClick={() => setLocFilter(null)} className="btn-secondary">✕ Reset Filter</button>
             </div>
           ) : (
             <div className="card overflow-x-auto">
@@ -1162,11 +1852,21 @@ export function WorkLogsView({
                       <th key={col.key} className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">{col.label}</th>
                     ))}
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Remarks</th>
-                    <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Actions</th>
+                    {isAdmin && (
+                      <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Actions</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {locations.map((loc, i) => (
+                  {displayedLocations.map((loc, i) => {
+                    // Span/spanRemarks on the NEXT tower describe the span between this
+                    // tower and the next one, so the connector row is shown right after
+                    // this (the first) tower of the pair — matching the Tower Diagram.
+                    // Skipped while a filter is active: the filtered list isn't
+                    // necessarily made of adjacent towers, so a "gap to the next one"
+                    // wouldn't mean anything.
+                    const nextLoc = locFilter ? undefined : locations[i + 1]
+                    return (
                     <Fragment key={loc.id}>
                       {/* Main row — tower's own data, plus Tower Remarks */}
                       <tr>
@@ -1178,40 +1878,48 @@ export function WorkLogsView({
                             loading={cellLoading === `${loc.id}:${col.key}`}
                             raLoading={cellLoading === `${loc.id}:${col.key}:ra`}
                             billingOptions={billingOptions}
+                            showBilling={isAdmin}
+                            extraStatusOptions={customStatusNames(col.key)}
+                            onAddStatusOption={(stageKey) => openStatusModal(stageKey, loc.id)}
                             onAddBillingOption={(stageKey) => openBillingModal(loc.id, stageKey)}
                             onChange={(stageKey, value) => handleStageChange(loc.id, stageKey, value)}
                             onChangeRa={(stageKey, value) => handleRaChange(loc.id, stageKey, value)} />
                         ))}
-                        <td className="px-2 py-2 text-center align-top text-slate-700">{loc.notes || '—'}</td>
-                        <td className="px-2 py-2 text-center align-top">
-                          <div className="flex items-center justify-center gap-2">
-                            <button onClick={() => { setEditingLoc(loc); setShowAddLoc(false) }}
-                              className="text-slate-400 hover:text-slate-700 transition-colors p-1">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                              </svg>
-                            </button>
-                            <button onClick={() => handleDeleteLoc(loc.id, loc.locationNo)}
-                              className="text-slate-400 hover:text-red-600 transition-colors p-1">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                              </svg>
-                            </button>
-                          </div>
-                        </td>
+                        <td className="px-2 py-2 text-center align-top text-slate-700"><RemarkPreview raw={loc.notes} label="Tower Remarks" /></td>
+                        {isAdmin && (
+                          <td className="px-2 py-2 text-center align-top">
+                            <div className="flex items-center justify-center gap-2">
+                              <button onClick={() => { setEditingLoc(loc); setShowAddLoc(false) }}
+                                className="text-slate-400 hover:text-slate-700 transition-colors p-1">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button onClick={() => handleDeleteLoc(loc.id, loc.locationNo)}
+                                className="text-slate-400 hover:text-red-600 transition-colors p-1">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                       {/* Extra row — otherwise empty, carrying only the Span value and
-                          Span Remarks (distance from the previous tower) */}
-                      <tr className="bg-slate-50/50">
-                        <td />
-                        <td />
-                        <td className="px-2 py-2 text-center text-slate-700 font-semibold">{i === 0 ? '—' : (loc.span || '—')}</td>
-                        {STAGE_COLUMNS.map(col => <td key={col.key} />)}
-                        <td className="px-2 py-2 text-center text-slate-500">{i === 0 ? '—' : (loc.spanRemarks || '—')}</td>
-                        <td />
-                      </tr>
+                          Span Remarks for the span leading to the next tower */}
+                      {nextLoc && (
+                        <tr className="bg-slate-50/50 text-[11px] leading-tight">
+                          <td />
+                          <td />
+                          <td className="px-2 py-0.5 text-center text-slate-700 font-semibold">{nextLoc.span || '—'}</td>
+                          {STAGE_COLUMNS.map(col => <td key={col.key} />)}
+                          <td className="px-2 py-0.5 text-center text-slate-500"><RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks" /></td>
+                          {isAdmin && <td />}
+                        </tr>
+                      )}
                     </Fragment>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

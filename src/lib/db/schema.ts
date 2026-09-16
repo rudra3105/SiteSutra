@@ -306,6 +306,19 @@ export const customBillingOptions = sqliteTable('custom_billing_options', {
 
 export type CustomBillingOption = typeof customBillingOptions.$inferSelect
 
+// Per-site, per-stage-column custom status values (e.g. an extra Foundation
+// status beyond the fixed COMP/U-P/CLEAR/ROW set), added the same way billing
+// options are.
+export const customStageOptions = sqliteTable('custom_stage_options', {
+  id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  siteId:    text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  stageKey:  text('stage_key').notNull(),
+  name:      text('name').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+})
+
+export type CustomStageOption = typeof customStageOptions.$inferSelect
+
 export type SiteLocation = typeof siteLocations.$inferSelect
 
 // ── Site Work Status ──────────────────────────────────────────

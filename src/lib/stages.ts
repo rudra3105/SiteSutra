@@ -16,18 +16,40 @@ export type StageColumn = {
   measureBy?: 'span'
 }
 
+// Every stage column keeps this same base set of statuses — fixed, not
+// removable or renameable from the UI. Columns may layer their own
+// domain-specific values (e.g. Foundation's SR/PSNS/...) on top, and site
+// admins can add further custom values per column (see customStageOptions
+// in the schema) the same way custom billing options work.
+export const FIXED_STAGE_OPTIONS: StageOption[] = [
+  { value: 'COMP',  label: 'COMP',  color: 'green' },
+  { value: 'U/P',   label: 'U/P',   color: 'yellow' },
+  { value: 'CLEAR', label: 'CLEAR', color: 'purple' },
+  { value: 'ROW',   label: 'ROW',   color: 'red' },
+]
+
+function withFixedOptions(extra: StageOption[] = []): StageOption[] {
+  const extraOnly = extra.filter((o) => !FIXED_STAGE_OPTIONS.some((f) => f.value === o.value))
+  return [...FIXED_STAGE_OPTIONS, ...extraOnly]
+}
+
+// A value counts as "completed" unless it's one of the fixed non-complete
+// markers (U/P, CLEAR, ROW) or empty. That means COMP counts, each column's
+// own built-in extras (e.g. Foundation's SR/PSNS/...) count, and — since a
+// custom status added via "Statuses" is never named U/P/CLEAR/ROW — any
+// custom status added to any column counts as completed too.
+function defaultIsCompleted(v: string | null | undefined) {
+  return !!v && v !== 'U/P' && v !== 'CLEAR' && v !== 'ROW'
+}
+
 export const STAGE_COLUMNS: StageColumn[] = [
   {
     key: 'excavation',
     label: 'Excavation',
     statusField: 'excavationStatus',
     dateField: 'excavationDate',
-    options: [
-      { value: 'COMP', label: 'COMP', color: 'green' },
-      { value: 'U/P', label: 'U/P', color: 'yellow' },
-      { value: 'ROW', label: 'ROW', color: 'red' },
-    ],
-    isCompleted: (v) => v === 'COMP',
+    options: withFixedOptions(),
+    isCompleted: defaultIsCompleted,
   },
   {
     key: 'foundation',
@@ -35,16 +57,15 @@ export const STAGE_COLUMNS: StageColumn[] = [
     statusField: 'foundationStatus',
     dateField: 'foundationDate',
     raField: 'foundationRa',
-    options: [
+    options: withFixedOptions([
       { value: 'SR', label: 'SR', color: 'green' },
       { value: 'PSNS', label: 'PSNS', color: 'green' },
       { value: 'FDBC', label: 'FDBC', color: 'green' },
       { value: 'PDBC', label: 'PDBC', color: 'green' },
       { value: 'HR', label: 'HR', color: 'green' },
       { value: 'NDS', label: 'NDS', color: 'green' },
-      { value: 'ROW', label: 'ROW', color: 'red' },
-    ],
-    isCompleted: (v) => !!v && v !== 'ROW',
+    ]),
+    isCompleted: defaultIsCompleted,
   },
   {
     key: 'erection',
@@ -52,13 +73,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     statusField: 'erectionStatus',
     dateField: 'erectionDate',
     raField: 'erectionRa',
-    options: [
-      { value: 'COMP', label: 'COMP', color: 'green' },
-      { value: 'U/P', label: 'U/P', color: 'yellow' },
-      { value: 'ROW', label: 'ROW', color: 'red' },
-      { value: 'CLEAR', label: 'CLEAR', color: 'purple' },
-    ],
-    isCompleted: (v) => v === 'COMP',
+    options: withFixedOptions(),
+    isCompleted: defaultIsCompleted,
   },
   {
     key: 'earthing',
@@ -66,11 +82,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     statusField: 'earthingStatus',
     dateField: 'earthingDate',
     raField: 'earthingRa',
-    options: [
-      { value: 'COMP', label: 'COMP', color: 'green' },
-      { value: 'U/P', label: 'U/P', color: 'yellow' },
-    ],
-    isCompleted: (v) => v === 'COMP',
+    options: withFixedOptions(),
+    isCompleted: defaultIsCompleted,
   },
   {
     key: 'tackWelding',
@@ -78,11 +91,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     statusField: 'tackWeldingStatus',
     dateField: 'tackWeldingDate',
     raField: 'tackWeldingRa',
-    options: [
-      { value: 'COMP', label: 'COMP', color: 'green' },
-      { value: 'U/P', label: 'U/P', color: 'yellow' },
-    ],
-    isCompleted: (v) => v === 'COMP',
+    options: withFixedOptions(),
+    isCompleted: defaultIsCompleted,
   },
   {
     key: 'stringing',
@@ -91,11 +101,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     dateField: 'stringingDate',
     raField: 'stringingRa',
     measureBy: 'span',
-    options: [
-      { value: 'COMP', label: 'COMP', color: 'green' },
-      { value: 'ROW', label: 'ROW', color: 'red' },
-    ],
-    isCompleted: (v) => v === 'COMP',
+    options: withFixedOptions(),
+    isCompleted: defaultIsCompleted,
   },
   {
     key: 'opgw',
@@ -104,11 +111,8 @@ export const STAGE_COLUMNS: StageColumn[] = [
     dateField: 'opgwDate',
     raField: 'opgwRa',
     measureBy: 'span',
-    options: [
-      { value: 'COMP', label: 'COMP', color: 'green' },
-      { value: 'ROW', label: 'ROW', color: 'red' },
-    ],
-    isCompleted: (v) => v === 'COMP',
+    options: withFixedOptions(),
+    isCompleted: defaultIsCompleted,
   },
 ]
 

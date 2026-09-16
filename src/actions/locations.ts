@@ -1,8 +1,8 @@
 'use server'
 // @ts-nocheck
 
-import { db, siteLocations, customBillingOptions } from '@/lib/db'
-import { requireSession } from '@/lib/auth/session'
+import { db, siteLocations, customBillingOptions, customStageOptions } from '@/lib/db'
+import { requireSession, requireAdmin } from '@/lib/auth/session'
 import { eq, and, asc, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { STAGE_COLUMNS, stageColumn } from '@/lib/stages'
@@ -61,7 +61,7 @@ export async function createSiteLocation(data: {
   stages?: Record<string, string | undefined>
   ra?: Record<string, string | undefined>
 }) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
 
   if (!data.locationNo?.trim()) return { error: 'Location number is required' }
@@ -101,7 +101,7 @@ export async function updateSiteLocation(id: string, data: {
   ra?: Record<string, string | undefined>
   siteId: string
 }) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
 
   const [existing] = await db.select().from(siteLocations).where(eq(siteLocations.id, id))
@@ -110,8 +110,8 @@ export async function updateSiteLocation(id: string, data: {
     .set({
       ...(data.locationNo && { locationNo: data.locationNo.trim() }),
       ...(data.towerType  && { towerType:  data.towerType.trim()  }),
-      span:        data.span?.trim() || null,
-      spanRemarks: data.spanRemarks?.trim() || null,
+      ...(data.span        !== undefined && { span:        data.span?.trim() || null }),
+      ...(data.spanRemarks !== undefined && { spanRemarks: data.spanRemarks?.trim() || null }),
       notes:       data.notes?.trim() || null,
       excludeFromTotal: !!data.excludeFromTotal,
       ...buildStageFields(data.stages || {}, existing),
@@ -146,7 +146,7 @@ export async function updateLocationStageField(id: string, stageKey: string, val
 
 // One-tap update for a single stage's RA billing round.
 export async function updateLocationRaField(id: string, stageKey: string, value: string, siteId: string) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
 
   const col = stageColumn(stageKey)
@@ -162,7 +162,7 @@ export async function updateLocationRaField(id: string, stageKey: string, value:
 }
 
 export async function deleteSiteLocation(id: string, siteId: string) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
 
   await db.delete(siteLocations).where(eq(siteLocations.id, id))
@@ -200,7 +200,7 @@ export async function getCustomBillingOptions(siteId: string) {
 }
 
 export async function createCustomBillingOption(siteId: string, name: string) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
   if (!name?.trim()) return { error: 'Name required' }
 
@@ -217,7 +217,7 @@ export async function createCustomBillingOption(siteId: string, name: string) {
 }
 
 export async function renameCustomBillingOption(id: string, newName: string, siteId: string) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
   if (!newName?.trim()) return { error: 'Name required' }
 
@@ -240,7 +240,7 @@ export async function renameCustomBillingOption(id: string, newName: string, sit
 }
 
 export async function deleteCustomBillingOption(id: string, siteId: string) {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return { error: 'Unauthorized' }
 
   const [existing] = await db.select().from(customBillingOptions).where(eq(customBillingOptions.id, id))
@@ -251,6 +251,80 @@ export async function deleteCustomBillingOption(id: string, siteId: string) {
     for (const field of raFields) {
       await db.update(siteLocations).set({ [field]: null })
         .where(and(eq(siteLocations.siteId, siteId), eq((siteLocations as any)[field], existing.name)))
+    }
+  }
+
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true }
+}
+
+// ── Custom Stage Status Options ───────────────────────────────
+// Per-column extra status values, added the same way custom billing options
+// are. Every column always shows the fixed COMP/U-P/CLEAR/ROW set plus its
+// own built-in extras (see stages.ts) first; these are appended after.
+
+export async function getCustomStageOptions(siteId: string) {
+  const session = await requireSession()
+  if (!session) return []
+
+  return db.select().from(customStageOptions)
+    .where(eq(customStageOptions.siteId, siteId))
+    .orderBy(asc(customStageOptions.name))
+}
+
+export async function createCustomStageOption(siteId: string, stageKey: string, name: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+  if (!stageColumn(stageKey)) return { error: 'Unknown stage' }
+  if (!name?.trim()) return { error: 'Name required' }
+
+  const trimmed = name.trim()
+  const existingForCol = await db.select().from(customStageOptions)
+    .where(and(eq(customStageOptions.siteId, siteId), eq(customStageOptions.stageKey, stageKey)))
+  const dup = existingForCol.find((o: any) => o.name.toLowerCase() === trimmed.toLowerCase())
+  if (dup) return { success: true, id: dup.id, name: dup.name, stageKey }
+
+  const id = crypto.randomUUID()
+  await db.insert(customStageOptions).values({ id, siteId, stageKey, name: trimmed })
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true, id, name: trimmed, stageKey }
+}
+
+export async function renameCustomStageOption(id: string, newName: string, siteId: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+  if (!newName?.trim()) return { error: 'Name required' }
+
+  const [existing] = await db.select().from(customStageOptions).where(eq(customStageOptions.id, id))
+  if (!existing) return { error: 'Status option not found' }
+
+  const name = newName.trim()
+  await db.update(customStageOptions).set({ name }).where(eq(customStageOptions.id, id))
+
+  if (existing.name !== name) {
+    const col = stageColumn(existing.stageKey)
+    if (col) {
+      await db.update(siteLocations).set({ [col.statusField]: name })
+        .where(and(eq(siteLocations.siteId, siteId), eq((siteLocations as any)[col.statusField], existing.name)))
+    }
+  }
+
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true, name }
+}
+
+export async function deleteCustomStageOption(id: string, siteId: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+
+  const [existing] = await db.select().from(customStageOptions).where(eq(customStageOptions.id, id))
+  await db.delete(customStageOptions).where(eq(customStageOptions.id, id))
+
+  if (existing) {
+    const col = stageColumn(existing.stageKey)
+    if (col) {
+      await db.update(siteLocations).set({ [col.statusField]: null, [col.dateField]: null })
+        .where(and(eq(siteLocations.siteId, siteId), eq((siteLocations as any)[col.statusField], existing.name)))
     }
   }
 

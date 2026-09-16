@@ -119,6 +119,10 @@ async function run() {
       id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')))`,
 
+    `CREATE TABLE IF NOT EXISTS custom_stage_options (
+      id TEXT PRIMARY KEY, site_id TEXT NOT NULL, stage_key TEXT NOT NULL, name TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')))`,
+
     `CREATE TABLE IF NOT EXISTS cashbook_access (
       id TEXT PRIMARY KEY, cashbook_id TEXT NOT NULL, email TEXT NOT NULL,
       name TEXT NOT NULL, password_hash TEXT NOT NULL,
