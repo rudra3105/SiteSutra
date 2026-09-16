@@ -1018,8 +1018,10 @@ function LocationsDataModal({
 function TowerDiagramTab({ locations }: { locations: any[] }) {
   const erectionCol   = STAGE_COLUMNS.find(c => c.key === 'erection')
   const foundationCol = STAGE_COLUMNS.find(c => c.key === 'foundation')
+  const stringingCol  = STAGE_COLUMNS.find(c => c.key === 'stringing')
+  const opgwCol       = STAGE_COLUMNS.find(c => c.key === 'opgw')
 
-  if (!erectionCol || !foundationCol) return null
+  if (!erectionCol || !foundationCol || !stringingCol || !opgwCol) return null
 
   if (locations.length === 0) {
     return (
@@ -1035,9 +1037,23 @@ function TowerDiagramTab({ locations }: { locations: any[] }) {
         {locations.map((loc, i) => (
           <Fragment key={loc.id}>
             {i > 0 && (
-              <div className="flex flex-col items-center justify-center px-2 min-w-[44px]">
-                <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{loc.span || '—'}</span>
-                <div className="w-8 h-0.5 bg-slate-300 mt-1" />
+              // Stringing/OPGW are conductor runs strung BETWEEN two towers, not a
+              // property of either one — shown here in the connector, next to the
+              // span, the same way Excel's "span"-row does. loc.stringingStatus /
+              // loc.opgwStatus (on the tower AFTER the gap) describe this same gap,
+              // matching the span convention (see the Locations table). Span+OPGW
+              // sit above the connector line, Stringing below it.
+              <div key={`${loc.stringingStatus}-${loc.opgwStatus}`} className="flex flex-col items-center justify-center px-2 min-w-[64px]">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{loc.span || '—'}</span>
+                  <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(opgwCol, loc[opgwCol.statusField])}`}>
+                    {loc[opgwCol.statusField] || '—'}
+                  </div>
+                </div>
+                <div className="w-8 h-0.5 bg-slate-400 my-1.5" />
+                <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(stringingCol, loc[stringingCol.statusField])}`}>
+                  {loc[stringingCol.statusField] || '—'}
+                </div>
               </div>
             )}
             <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 bg-white">
