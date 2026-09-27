@@ -17,6 +17,14 @@ function inr(n: number) {
   return '\u20b9' + n.toFixed(0)
 }
 
+// Formats a "yyyy-mm-dd" value as "dd-mm-yyyy" for display.
+function formatDDMMYYYY(value: unknown) {
+  const s = String(value ?? '')
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return s
+  return `${m[3]}-${m[2]}-${m[1]}`
+}
+
 export default async function SiteOverviewPage({ params }: any) {
   const session = await getSession()
   const isAdmin = session?.role === 'ADMIN'
@@ -93,7 +101,7 @@ export default async function SiteOverviewPage({ params }: any) {
             <div key={i} className="flex items-center justify-between py-2.5 border-b border-slate-100 last:border-0">
               <div>
                 <p className="text-slate-900 text-sm font-semibold">{log.workType?.name ?? 'Work'}</p>
-                <p className="text-slate-500 text-xs">{log.date}</p>
+                <p className="text-slate-500 text-xs">{formatDDMMYYYY(log.date)}</p>
               </div>
               <span className="text-orange-700 font-bold text-sm">{(log.quantity ?? 0).toFixed(1)} {log.workType?.unit ?? log.unit ?? ''}</span>
             </div>

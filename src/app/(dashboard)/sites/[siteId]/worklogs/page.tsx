@@ -6,7 +6,7 @@ import { getSiteLocations, getCustomBillingOptions, getCustomStageOptions } from
 import { db, workTypes, sites } from '@/lib/db'
 import { eq } from 'drizzle-orm'
 import { getSession } from '@/lib/auth/session'
-import { WorkLogsView } from '@/components/charts/WorkLogsView'
+import { WorkLogsView, TowerDiagramSampleButton } from '@/components/charts/WorkLogsView'
 
 export default async function WorkLogsPage({ params }) {
   const { siteId } = params
@@ -24,9 +24,12 @@ export default async function WorkLogsPage({ params }) {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-bold text-slate-900">Work Logs & Progress</h2>
-        <p className="text-slate-600 text-sm">Track locations, work stages, and daily progress</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Work Logs & Progress</h2>
+          <p className="text-slate-600 text-sm">Track locations, work stages, and daily progress</p>
+        </div>
+        <TowerDiagramSampleButton />
       </div>
       <WorkLogsView
         siteId={siteId}

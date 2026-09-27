@@ -144,6 +144,40 @@ export async function updateLocationStageField(id: string, stageKey: string, val
   return { success: true, ...fields }
 }
 
+// One-tap update for a single remarks field (Tower Remarks = notes, Span Remarks
+// = spanRemarks). Session-only (not admin-only) so supervisors can add/edit
+// remarks directly from the Remarks column without full location-edit access.
+export async function updateLocationRemarkField(id: string, field: 'notes' | 'spanRemarks', value: string, siteId: string) {
+  const session = await requireSession()
+  if (!session) return { error: 'Unauthorized' }
+  if (field !== 'notes' && field !== 'spanRemarks') return { error: 'Unknown remarks field' }
+
+  const trimmed = value?.trim() || null
+  await db.update(siteLocations)
+    .set({ [field]: trimmed, updatedAt: new Date().toISOString() })
+    .where(eq(siteLocations.id, id))
+
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true, [field]: trimmed }
+}
+
+// Drag-and-drop reorder — persists the new row order as sortOrder (0, 1, 2, ...)
+// so it sticks across reloads and drives every other view that lists locations
+// in sequence: the Locations table itself, the Visual Chart tab's tower
+// diagram, the Locations Data (View Data) modal, and the Excel/print exports —
+// they all just read locations back in this same sortOrder.
+export async function reorderSiteLocations(siteId: string, orderedIds: string[]) {
+  const session = await requireAdmin()
+  if (!session) return { error: 'Unauthorized' }
+
+  await Promise.all(orderedIds.map((id, i) =>
+    db.update(siteLocations).set({ sortOrder: i }).where(eq(siteLocations.id, id))
+  ))
+
+  revalidatePath(`/sites/${siteId}/worklogs`)
+  return { success: true }
+}
+
 // One-tap update for a single stage's RA billing round.
 export async function updateLocationRaField(id: string, stageKey: string, value: string, siteId: string) {
   const session = await requireAdmin()

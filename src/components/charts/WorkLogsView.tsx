@@ -1,11 +1,13 @@
 'use client'
 
-import { useState, useRef, useEffect, Fragment } from 'react'
+import { useState, useRef, useEffect, Fragment, type ReactNode } from 'react'
 import {
   createSiteLocation,
   updateSiteLocation,
   updateLocationStageField,
   updateLocationRaField,
+  updateLocationRemarkField,
+  reorderSiteLocations,
   deleteSiteLocation,
   getSiteLocations,
   createCustomBillingOption,
@@ -39,6 +41,14 @@ function optionColor(col: typeof STAGE_COLUMNS[number], value: string | null | u
 
 function escapeHtmlText(s: unknown) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// Formats a "yyyy-mm-dd" (or any Date-parseable) value as "dd-mm-yyyy" for display.
+function formatDDMMYYYY(value: unknown) {
+  const s = String(value ?? '')
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return s
+  return `${m[3]}-${m[2]}-${m[1]}`
 }
 
 // Inline-CSS equivalent of optionColor()'s Tailwind classes, for the print
@@ -109,7 +119,7 @@ async function exportLocationsToExcel(locations: any[], siteName: string, billin
     // Row 1: Sr No / Loc No / Tower type / stage statuses / dates
     const row1Vals: (string | number)[] = [i + 1, loc.locationNo, loc.towerType, '']
     for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.statusField] ?? '')
-    for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.dateField] ?? '')
+    for (const col of STAGE_COLUMNS) row1Vals.push(loc[col.dateField] ? formatDDMMYYYY(loc[col.dateField]) : '')
     locSheet.addRow(row1Vals)
     // Row 2: blank Sr/Loc/Type, Span value, blank stage/date cells (kept for the merged look).
     // Span on the NEXT tower describes the span between this tower and the next one, so it's
@@ -322,10 +332,13 @@ async function exportLocationsToExcel(locations: any[], siteName: string, billin
     counts.forEach((c, i) => { angleTotals[angles[i]] += c })
     const rowTotal = counts.reduce((s, c) => s + c, 0)
     grandTotal += rowTotal
-    const r = typeSheet.addRow([type, ...counts, rowTotal])
+    // The "0°" column doubles as this row's running total across every angle
+    // (0°+3°+6°+...), not just its own count — 3°, 6° etc. stay per-angle.
+    const displayCounts = counts.map((c, i) => angles[i] === '0' ? rowTotal : c)
+    const r = typeSheet.addRow([type, ...displayCounts, rowTotal])
     r.eachCell(c => { c.border = allBorder; c.alignment = { horizontal: 'center' } })
   }
-  const totalRow = typeSheet.addRow(['Total', ...angles.map(a => angleTotals[a]), grandTotal])
+  const totalRow = typeSheet.addRow(['Total', ...angles.map(a => a === '0' ? grandTotal : angleTotals[a]), grandTotal])
   totalRow.eachCell(c => { c.border = allBorder; c.alignment = { horizontal: 'center' }; c.font = { bold: true } })
   typeSheet.columns.forEach(c => { c.width = 12 })
 
@@ -489,61 +502,194 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
   )
 }
 
-// Truncated single-line preview with a "Read more" link that opens the full
-// rich text + photos in a modal. Used for both Tower Remarks and Span Remarks.
-function RemarkPreview({ raw, label }: { raw: string; label: string }) {
+// Truncated single-line preview with an eye/+ icon that opens the full rich
+// text + photos in a modal. Used for both Tower Remarks and Span Remarks.
+// When `onSave` is given (the main, per-row Locations table) the modal also
+// offers an "Edit" mode so remarks can be added/changed without opening the
+// full Edit Location form — available to supervisors too, not just admins.
+function RemarkPreview({ raw, label, onSave }: { raw: string; label: string; onSave?: (value: string) => Promise<any> }) {
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const { html, images } = parseRemark(raw)
   const text = stripHtml(html)
-  if (!text && images.length === 0) return <>—</>
+  const hasContent = !!text || images.length > 0
+  const editable = !!onSave
 
-  const LIMIT = 18
-  const truncated = text.length > LIMIT ? text.slice(0, LIMIT) + '…' : text
-  const showReadMore = text.length > LIMIT || images.length > 0
+  if (!hasContent && !editable) return <>—</>
+
+  function openView() { setEditing(false); setOpen(true) }
+  function openAdd() { setEditing(true); setOpen(true) }
+  function close() { setOpen(false); setEditing(false) }
+
+  async function handleSave(value: string) {
+    const result = await onSave!(value)
+    if (!result?.error) setEditing(false)
+    return result
+  }
 
   return (
     <>
-      <span className="inline-flex max-w-full items-baseline gap-1">
-        {text
-          ? <span className="truncate max-w-[110px]">{truncated}</span>
-          : <span className="text-slate-400 italic">📷 Photo</span>}
-        {showReadMore && (
-          <button type="button" onClick={() => setOpen(true)}
-            className="text-orange-600 hover:text-orange-700 font-semibold underline whitespace-nowrap">
-            Read more
+      <span className="inline-flex max-w-full items-center justify-center">
+        {hasContent ? (
+          <button type="button" onClick={openView} title={`View ${label}`}
+            className="text-slate-400 hover:text-slate-700 p-1 flex-shrink-0">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+        ) : editable && (
+          <button type="button" onClick={openAdd} title={`Add ${label}`}
+            className="text-slate-400 hover:text-slate-700 p-1 flex-shrink-0">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
           </button>
         )}
       </span>
       {open && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50" onClick={close}>
           <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full p-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <h4 className="font-bold text-slate-900 text-sm">{label}</h4>
-              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-700 p-1">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            {text && (
-              <div className="text-slate-700 text-sm leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
-                dangerouslySetInnerHTML={{ __html: sanitizeRemarkHtml(html) }} />
-            )}
-            {images.length > 0 && (
-              <div className={`grid grid-cols-4 gap-3 ${text ? 'mt-4' : ''}`}>
-                {images.map((url, i) => (
-                  <button key={i} type="button" onClick={() => setLightbox(url)} className="block">
-                    <img src={url} alt="Remark attachment" className="w-full h-32 object-cover rounded border border-slate-200 hover:opacity-90 transition-opacity" />
+              <div className="flex items-center gap-3">
+                {editable && !editing && (
+                  <button onClick={() => setEditing(true)} className="text-orange-600 hover:text-orange-700 text-xs font-semibold underline">
+                    Edit
                   </button>
-                ))}
+                )}
+                <button onClick={close} className="text-slate-400 hover:text-slate-700 p-1">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
+            </div>
+            {editing ? (
+              <RemarkQuickEditor defaultValue={raw} placeholder={`Any ${label.toLowerCase()}...`}
+                onSave={handleSave} onCancel={() => (hasContent ? setEditing(false) : close())} />
+            ) : (
+              <>
+                {text && (
+                  <div className="text-slate-700 text-sm leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
+                    dangerouslySetInnerHTML={{ __html: sanitizeRemarkHtml(html) }} />
+                )}
+                {images.length > 0 && (
+                  <div className={`grid grid-cols-4 gap-3 ${text ? 'mt-4' : ''}`}>
+                    {images.map((url, i) => (
+                      <button key={i} type="button" onClick={() => setLightbox(url)} className="block">
+                        <img src={url} alt="Remark attachment" className="w-full h-32 object-cover rounded border border-slate-200 hover:opacity-90 transition-opacity" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
       )}
       {lightbox && <ImageLightbox url={lightbox} onClose={() => setLightbox(null)} />}
     </>
+  )
+}
+
+// Self-contained rich text + photo editor with its own Save/Cancel, used inside
+// the RemarkPreview modal for one-tap remark add/edit (no full form submit).
+function RemarkQuickEditor({ defaultValue, placeholder, onSave, onCancel }: {
+  defaultValue?: string | null
+  placeholder?: string
+  onSave: (value: string) => Promise<any>
+  onCancel: () => void
+}) {
+  const initial = useRef(parseRemark(defaultValue)).current
+  const editorRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [html, setHtml] = useState(initial.html)
+  const [images, setImages] = useState<string[]>(initial.images)
+  const [uploading, setUploading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (editorRef.current) editorRef.current.innerHTML = initial.html
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function exec(cmd: string) {
+    editorRef.current?.focus()
+    document.execCommand(cmd)
+    setHtml(editorRef.current?.innerHTML ?? '')
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const text = e.clipboardData.getData('text/plain')
+    document.execCommand('insertText', false, text)
+    setHtml(editorRef.current?.innerHTML ?? '')
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]; if (!file) return
+    setUploading(true); setErr('')
+    const fd = new FormData(); fd.append('file', file)
+    const res = await fetch('/api/upload', { method: 'POST', body: fd })
+    const data = await res.json()
+    setUploading(false)
+    if (fileRef.current) fileRef.current.value = ''
+    if (!res.ok || data.error) { setErr(data.error ?? 'Upload failed'); return }
+    setImages(prev => [...prev, data.url])
+  }
+
+  async function handleSave() {
+    setSaving(true); setErr('')
+    const value = JSON.stringify({ html: sanitizeRemarkHtml(html), images })
+    const result = await onSave(value)
+    setSaving(false)
+    if (result?.error) setErr(result.error)
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 border border-slate-200 border-b-0 rounded-t-lg bg-slate-50 px-1.5 py-1">
+        <button type="button" onClick={() => exec('bold')} className="w-6 h-6 rounded text-xs font-bold text-slate-600 hover:bg-slate-200">B</button>
+        <button type="button" onClick={() => exec('italic')} className="w-6 h-6 rounded text-xs italic text-slate-600 hover:bg-slate-200">I</button>
+        <button type="button" onClick={() => exec('underline')} className="w-6 h-6 rounded text-xs underline text-slate-600 hover:bg-slate-200">U</button>
+        <button type="button" onClick={() => exec('insertUnorderedList')} className="px-1.5 h-6 rounded text-xs text-slate-600 hover:bg-slate-200">• List</button>
+        <div className="w-px h-4 bg-slate-300 mx-1" />
+        <label className={`px-1.5 h-6 flex items-center rounded text-xs text-slate-600 hover:bg-slate-200 cursor-pointer ${uploading ? 'opacity-50' : ''}`}>
+          📷 {uploading ? 'Uploading...' : 'Photo'}
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={uploading} />
+        </label>
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={() => setHtml(editorRef.current?.innerHTML ?? '')}
+        onPaste={handlePaste}
+        className="input rounded-t-none min-h-[160px] empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
+        data-placeholder={placeholder}
+      />
+      {err && <p className="text-red-600 text-xs mt-1">{err}</p>}
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {images.map((url, i) => (
+            <div key={i} className="relative">
+              <img src={url} alt="Attachment" className="w-14 h-14 object-cover rounded border border-slate-200" />
+              <button type="button" onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}
+                className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white rounded-full text-[10px] leading-4">×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-3 pt-3">
+        <button type="button" onClick={onCancel} disabled={saving} className="btn-secondary flex-1 disabled:opacity-60">Cancel</button>
+        <button type="button" onClick={handleSave} disabled={saving || uploading} className="btn flex-1 disabled:opacity-60">
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -617,7 +763,7 @@ function RemarkEditor({ name, defaultValue, placeholder }: { name: string; defau
         suppressContentEditableWarning
         onInput={() => setHtml(editorRef.current?.innerHTML ?? '')}
         onPaste={handlePaste}
-        className="input rounded-t-none min-h-[64px] empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
+        className="input rounded-t-none min-h-[160px] empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
         data-placeholder={placeholder}
       />
       {err && <p className="text-red-600 text-xs mt-1">{err}</p>}
@@ -698,7 +844,7 @@ function matchesBillingFilter(filter: BillingFilter, l: any): boolean {
 }
 
 function LocationsDataModal({
-  locations, siteName, onClose, billingOptions, activeFilter, onSelectFilter,
+  locations, siteName, onClose, billingOptions, activeFilter, onSelectFilter, isAdmin = true,
 }: {
   locations: any[]
   siteName: string
@@ -706,6 +852,7 @@ function LocationsDataModal({
   billingOptions: string[]
   activeFilter: BillingFilter | null
   onSelectFilter: (f: BillingFilter) => void
+  isAdmin?: boolean
 }) {
   // Towers marked "Don't include in total towers" are excluded from every
   // count/summary below (Progress Summary, Billing Summary, Tower Type Summary) —
@@ -824,7 +971,7 @@ function LocationsDataModal({
                               <span className={`inline-block w-full font-bold rounded border px-1.5 py-1 ${optionColor(col, value)}`}>
                                 {value || '—'}
                               </span>
-                              <p className="text-[10px] text-slate-500 mt-0.5 text-center min-h-[14px]">{date || ''}</p>
+                              <p className="text-[10px] text-slate-500 mt-0.5 text-center min-h-[14px]">{date ? formatDDMMYYYY(date) : ''}</p>
                             </td>
                           )
                         })}
@@ -845,13 +992,15 @@ function LocationsDataModal({
                     </Fragment>
                     )
                   })}
-                  {/* Totals row: span sum + per-stage completed count — excludes towers
-                      marked "Don't include in total towers", same as the summaries below.
-                      Stringing/OPGW are measured in total span (conductor length)
-                      completed, not tower count — see stageQty(). */}
+                  {/* Totals row: span sum (ALL towers, even ones marked "Don't include
+                      in total towers" — that flag only excludes a tower from progress/
+                      billing/type counts, never from the physical span total) + per-stage
+                      completed count, which does exclude those towers, same as the
+                      summaries below. Stringing/OPGW are measured in total span
+                      (conductor length) completed, not tower count — see stageQty(). */}
                   <tr className="bg-slate-50 font-bold text-slate-800">
                     <td className="px-2 py-2 text-center" colSpan={3}>Total</td>
-                    <td className="px-2 py-2 text-center">{counted.reduce((s, l) => s + (Number(l.span) || 0), 0)}</td>
+                    <td className="px-2 py-2 text-center">{locations.reduce((s, l) => s + (Number(l.span) || 0), 0)}</td>
                     {STAGE_COLUMNS.map(col => (
                       <td key={col.key} className="px-2 py-2 text-center">
                         {stageQty(col, counted.filter(l => col.isCompleted(l[col.statusField])))}
@@ -933,45 +1082,50 @@ function LocationsDataModal({
                     </tr>
                   </tbody>
 
-                  {/* Gap between WORKED and BILLED — a blank spacer row */}
-                  <tbody>
-                    <tr><td colSpan={billedCols.length + 2} className="h-3 p-0 border-0 bg-white" /></tr>
-                  </tbody>
+                  {/* Gap between WORKED and BILLED — a blank spacer row.
+                      BILLED itself (RA rounds) is admin-only, not shown to supervisors. */}
+                  {isAdmin && (
+                    <>
+                      <tbody>
+                        <tr><td colSpan={billedCols.length + 2} className="h-3 p-0 border-0 bg-white" /></tr>
+                      </tbody>
 
-                  {/* BILLED block — its own bordered tbody */}
-                  <tbody className="divide-y divide-slate-100 border border-slate-200">
-                    {billingOptions.length === 0 ? (
-                      <tr>
-                        <td className="px-3 py-2 font-bold text-slate-700">BILLED</td>
-                        <td className="px-3 py-2 text-slate-400 italic text-sm" colSpan={billedCols.length + 1}>No billing options yet</td>
-                      </tr>
-                    ) : billingOptions.map((opt, ri) => (
-                      <tr key={opt}>
-                        {ri === 0 && <td className="px-3 py-2 font-bold text-slate-700" rowSpan={billingOptions.length}>BILLED</td>}
-                        <td className="px-3 py-2 font-semibold text-slate-700">{opt}</td>
-                        {billedCols.map((c, i) => (
-                          <CountCell key={c.key} value={raCounts[opt][i]}
-                            filterProps={{ colKey: c.key, kind: 'ra', raOption: opt, label: `${c.label} — ${opt}` }} />
+                      {/* BILLED block — its own bordered tbody */}
+                      <tbody className="divide-y divide-slate-100 border border-slate-200">
+                        {billingOptions.length === 0 ? (
+                          <tr>
+                            <td className="px-3 py-2 font-bold text-slate-700">BILLED</td>
+                            <td className="px-3 py-2 text-slate-400 italic text-sm" colSpan={billedCols.length + 1}>No billing options yet</td>
+                          </tr>
+                        ) : billingOptions.map((opt, ri) => (
+                          <tr key={opt}>
+                            {ri === 0 && <td className="px-3 py-2 font-bold text-slate-700" rowSpan={billingOptions.length}>BILLED</td>}
+                            <td className="px-3 py-2 font-semibold text-slate-700">{opt}</td>
+                            {billedCols.map((c, i) => (
+                              <CountCell key={c.key} value={raCounts[opt][i]}
+                                filterProps={{ colKey: c.key, kind: 'ra', raOption: opt, label: `${c.label} — ${opt}` }} />
+                            ))}
+                          </tr>
                         ))}
-                      </tr>
-                    ))}
-                    <tr>
-                      <td className="px-3 py-2 font-bold text-slate-700"></td>
-                      <td className="px-3 py-2 font-bold text-slate-800">TOTAL</td>
-                      {billedCols.map((c, i) => (
-                        <CountCell key={c.key} value={totalBilled[i]} className="font-bold text-slate-800"
-                          filterProps={{ colKey: c.key, kind: 'billedTotal', label: `${c.label} — Billed Total` }} />
-                      ))}
-                    </tr>
-                    <tr>
-                      <td className="px-3 py-2"></td>
-                      <td className="px-3 py-2 font-semibold text-slate-700">BALANCE</td>
-                      {billedCols.map((c, i) => (
-                        <CountCell key={c.key} value={worked[i].completed - totalBilled[i]}
-                          filterProps={{ colKey: c.key, kind: 'billedBalance', label: `${c.label} — Completed but not yet billed` }} />
-                      ))}
-                    </tr>
-                  </tbody>
+                        <tr>
+                          <td className="px-3 py-2 font-bold text-slate-700"></td>
+                          <td className="px-3 py-2 font-bold text-slate-800">TOTAL</td>
+                          {billedCols.map((c, i) => (
+                            <CountCell key={c.key} value={totalBilled[i]} className="font-bold text-slate-800"
+                              filterProps={{ colKey: c.key, kind: 'billedTotal', label: `${c.label} — Billed Total` }} />
+                          ))}
+                        </tr>
+                        <tr>
+                          <td className="px-3 py-2"></td>
+                          <td className="px-3 py-2 font-semibold text-slate-700">BALANCE</td>
+                          {billedCols.map((c, i) => (
+                            <CountCell key={c.key} value={worked[i].completed - totalBilled[i]}
+                              filterProps={{ colKey: c.key, kind: 'billedBalance', label: `${c.label} — Completed but not yet billed` }} />
+                          ))}
+                        </tr>
+                      </tbody>
+                    </>
+                  )}
                 </table>
               </div>
             </section>
@@ -993,13 +1147,16 @@ function LocationsDataModal({
                   {typeRows.map(r => (
                     <tr key={r.type}>
                       <td className="px-3 py-2 font-semibold text-slate-800">{r.type}</td>
-                      {r.counts.map((c, i) => <td key={i} className="px-3 py-2 text-center text-slate-700">{c}</td>)}
+                      {/* The "0°" column doubles as this row's running total across
+                          every angle (0°+3°+6°+...), not just its own count —
+                          3°, 6° etc. stay per-angle. */}
+                      {r.counts.map((c, i) => <td key={i} className="px-3 py-2 text-center text-slate-700">{angles[i] === '0' ? r.rowTotal : c}</td>)}
                       <td className="px-3 py-2 text-center font-semibold text-slate-800">{r.rowTotal}</td>
                     </tr>
                   ))}
                   <tr className="bg-slate-50 font-bold">
                     <td className="px-3 py-2 text-slate-800">Total</td>
-                    {angles.map(a => <td key={a} className="px-3 py-2 text-center text-slate-800">{angleTotals[a]}</td>)}
+                    {angles.map(a => <td key={a} className="px-3 py-2 text-center text-slate-800">{a === '0' ? grandTotal : angleTotals[a]}</td>)}
                     <td className="px-3 py-2 text-center text-slate-800">{grandTotal}</td>
                   </tr>
                 </tbody>
@@ -1013,15 +1170,80 @@ function LocationsDataModal({
   )
 }
 
-// ── Tower Diagram tab: towers laid out in sequence, wrapping onto new lines
-//    (instead of one long horizontally-scrolling row) when they don't fit ───
-function TowerDiagramTab({ locations }: { locations: any[] }) {
-  const erectionCol   = STAGE_COLUMNS.find(c => c.key === 'erection')
-  const foundationCol = STAGE_COLUMNS.find(c => c.key === 'foundation')
-  const stringingCol  = STAGE_COLUMNS.find(c => c.key === 'stringing')
-  const opgwCol       = STAGE_COLUMNS.find(c => c.key === 'opgw')
+// ── Tower Diagram tab: towers laid out in a fixed-size grid so every row
+//    holds the same number of towers and they line up vertically column by
+//    column, instead of wrapping wherever they happen to fit ───────────────
+const DIAGRAM_ROW_SIZE = 6
 
-  if (!erectionCol || !foundationCol || !stringingCol || !opgwCol) return null
+function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?: string }) {
+  const erectionCol    = STAGE_COLUMNS.find(c => c.key === 'erection')
+  const foundationCol  = STAGE_COLUMNS.find(c => c.key === 'foundation')
+  const earthingCol    = STAGE_COLUMNS.find(c => c.key === 'earthing')
+  const tackWeldingCol = STAGE_COLUMNS.find(c => c.key === 'tackWelding')
+  const stringingCol   = STAGE_COLUMNS.find(c => c.key === 'stringing')
+  const opgwCol        = STAGE_COLUMNS.find(c => c.key === 'opgw')
+
+  if (!erectionCol || !foundationCol || !earthingCol || !tackWeldingCol || !stringingCol || !opgwCol) return null
+
+  // Its own Print — separate from the Locations tab's (table-based, filter-only)
+  // Print — since the Visual Chart's diagram layout can't be represented as a
+  // plain table. Prints the same fixed-column grid, with the same letterhead
+  // (company name + site name) as the Locations print.
+  function handlePrintDiagram() {
+    const win = window.open('', '_blank', 'width=1200,height=800')
+    if (!win) return
+
+    const cellStyle = (col: typeof STAGE_COLUMNS[number], value: string, thick?: boolean) =>
+      `display:inline-block;min-width:${thick ? '64px' : '56px'};padding:${thick ? '5px 8px' : '2px 6px'};border-radius:4px;font-weight:700;font-size:${thick ? '11px' : '10px'};text-align:center;box-sizing:border-box;${printColorStyle(col, value)}${thick ? ';border-width:2px;border-color:#1e293b' : ''}`
+
+    const itemsHtml = locations.map((loc, i) => {
+      const startsRow = i % DIAGRAM_ROW_SIZE === 0
+      const connectorHtml = !startsRow ? `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 8px;min-width:64px;">
+          <div style="font-size:10px;font-weight:700;color:#64748b;white-space:nowrap;">${escapeHtmlText(loc.span || '—')}</div>
+          <div style="${cellStyle(opgwCol!, loc[opgwCol!.statusField] || '')}">${escapeHtmlText(loc[opgwCol!.statusField] || '—')}</div>
+          <div style="width:32px;height:1px;background:#94a3b8;margin:6px 0;"></div>
+          <div style="${cellStyle(stringingCol!, loc[stringingCol!.statusField] || '')}">${escapeHtmlText(loc[stringingCol!.statusField] || '—')}</div>
+        </div>` : ''
+      const towerHtml = `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;background:#fff;">
+          <div style="font-size:14px;font-weight:700;white-space:nowrap;">${escapeHtmlText(loc.locationNo)}</div>
+          <div style="${cellStyle(tackWeldingCol!, loc[tackWeldingCol!.statusField] || '')}">${escapeHtmlText(loc[tackWeldingCol!.statusField] || '—')}</div>
+          <div style="${cellStyle(erectionCol!, loc[erectionCol!.statusField] || '', true)}">${escapeHtmlText(loc[erectionCol!.statusField] || '—')}</div>
+          <div style="${cellStyle(foundationCol!, loc[foundationCol!.statusField] || '', true)}">${escapeHtmlText(loc[foundationCol!.statusField] || '—')}</div>
+          <div style="${cellStyle(earthingCol!, loc[earthingCol!.statusField] || '')}">${escapeHtmlText(loc[earthingCol!.statusField] || '—')}</div>
+          <div style="font-size:11px;font-weight:600;color:#334155;white-space:nowrap;">${escapeHtmlText(loc.towerType)}</div>
+        </div>`
+      return `<div style="display:flex;align-items:center;">${connectorHtml}${towerHtml}</div>`
+    }).join('')
+
+    win.document.write(`<!DOCTYPE html>
+      <html>
+      <head>
+        <title>${escapeHtmlText(siteName || 'Site')} — Visual Chart</title>
+        <style>
+          body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
+          .letterhead { text-align: center; margin-bottom: 20px; }
+          .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
+          .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
+          p.sub { font-size: 12px; color: #64748b; margin: 10px 0 16px; text-align: center; }
+          .grid { display: grid; grid-template-columns: repeat(${DIAGRAM_ROW_SIZE}, max-content); row-gap: 20px; column-gap: 0; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="letterhead">
+          <h1>JAYPAL ENTERPRISE</h1>
+          <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
+        </div>
+        <p class="sub">Visual Chart · ${locations.length} tower${locations.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <div class="grid">${itemsHtml}</div>
+      </body>
+      </html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { try { win.print() } catch { /* user can print manually */ } }, 300)
+  }
 
   if (locations.length === 0) {
     return (
@@ -1032,44 +1254,161 @@ function TowerDiagramTab({ locations }: { locations: any[] }) {
   }
 
   return (
-    <div className="card p-5">
-      <div className="flex flex-wrap items-center gap-y-5">
-        {locations.map((loc, i) => (
-          <Fragment key={loc.id}>
-            {i > 0 && (
-              // Stringing/OPGW are conductor runs strung BETWEEN two towers, not a
-              // property of either one — shown here in the connector, next to the
-              // span, the same way Excel's "span"-row does. loc.stringingStatus /
-              // loc.opgwStatus (on the tower AFTER the gap) describe this same gap,
-              // matching the span convention (see the Locations table). Span+OPGW
-              // sit above the connector line, Stringing below it.
-              <div key={`${loc.stringingStatus}-${loc.opgwStatus}`} className="flex flex-col items-center justify-center px-2 min-w-[64px]">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{loc.span || '—'}</span>
-                  <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(opgwCol, loc[opgwCol.statusField])}`}>
-                    {loc[opgwCol.statusField] || '—'}
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <button type="button" onClick={handlePrintDiagram} className="btn-secondary text-sm">
+          🖨 Print
+        </button>
+      </div>
+      <div className="card p-5 overflow-x-auto">
+      <div className="grid gap-y-5 items-center" style={{ gridTemplateColumns: `repeat(${DIAGRAM_ROW_SIZE}, max-content)` }}>
+        {locations.map((loc, i) => {
+          // Every DIAGRAM_ROW_SIZE-th tower starts a new grid row — its connector
+          // (which describes the span/stringing/OPGW back to the PREVIOUS tower)
+          // is skipped, the same way the very first tower has none, so a row
+          // never opens with a dangling connector to a tower on the row above.
+          const startsRow = i % DIAGRAM_ROW_SIZE === 0
+          return (
+            <div key={loc.id} className="flex items-center">
+              {!startsRow && (
+                // Stringing/OPGW are conductor runs strung BETWEEN two towers, not a
+                // property of either one — shown here in the connector, next to the
+                // span, the same way Excel's "span"-row does. loc.stringingStatus /
+                // loc.opgwStatus (on the tower AFTER the gap) describe this same gap,
+                // matching the span convention (see the Locations table). Span+OPGW
+                // sit above the connector line, Stringing below it.
+                <div className="flex flex-col items-center justify-center px-2 min-w-[64px]">
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{loc.span || '—'}</span>
+                    <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(opgwCol, loc[opgwCol.statusField])}`}>
+                      {loc[opgwCol.statusField] || '—'}
+                    </div>
+                  </div>
+                  <div className="w-8 h-0.5 bg-slate-400 my-1.5" />
+                  <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(stringingCol, loc[stringingCol.statusField])}`}>
+                    {loc[stringingCol.statusField] || '—'}
                   </div>
                 </div>
-                <div className="w-8 h-0.5 bg-slate-400 my-1.5" />
-                <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(stringingCol, loc[stringingCol.statusField])}`}>
-                  {loc[stringingCol.statusField] || '—'}
+              )}
+              <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 bg-white">
+                <div className="text-sm font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</div>
+                <div className={`text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap ${optionColor(tackWeldingCol, loc[tackWeldingCol.statusField])}`}>
+                  {loc[tackWeldingCol.statusField] || '—'}
                 </div>
+                <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap ${optionColor(erectionCol, loc[erectionCol.statusField])}`}>
+                  {loc[erectionCol.statusField] || '—'}
+                </div>
+                <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap ${optionColor(foundationCol, loc[foundationCol.statusField])}`}>
+                  {loc[foundationCol.statusField] || '—'}
+                </div>
+                <div className={`text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap ${optionColor(earthingCol, loc[earthingCol.statusField])}`}>
+                  {loc[earthingCol.statusField] || '—'}
+                </div>
+                <div className="text-xs font-semibold text-slate-700 whitespace-nowrap">{loc.towerType}</div>
               </div>
-            )}
-            <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 bg-white">
-              <div className="text-sm font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</div>
-              <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-1.5 min-w-[64px] text-center whitespace-nowrap ${optionColor(erectionCol, loc[erectionCol.statusField])}`}>
-                {loc[erectionCol.statusField] || '—'}
-              </div>
-              <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-1.5 min-w-[64px] text-center whitespace-nowrap ${optionColor(foundationCol, loc[foundationCol.statusField])}`}>
-                {loc[foundationCol.statusField] || '—'}
-              </div>
-              <div className="text-xs font-semibold text-slate-700 whitespace-nowrap">{loc.towerType}</div>
             </div>
-          </Fragment>
-        ))}
+          )
+        })}
+      </div>
       </div>
     </div>
+  )
+}
+
+// ── Sample tower diagram button + modal: a header-level "what does each box
+//    mean" reference for the Visual Chart tab's tower diagram, common to all
+//    three tabs. The illustration is an exact copy of a real tower + its two
+//    connectors (same classNames as TowerDiagramTab, unshrunk), flanked left
+//    and right the same way a middle tower sits in a real row — connectors
+//    carry Span/OPGW/Stringing, same as between any two real towers. Below it,
+//    each part pairs a connector line with its field name.
+function SampleConnector() {
+  return (
+    <div className="flex flex-col items-center justify-center px-2 min-w-[64px]">
+      <div className="flex flex-col items-center gap-1">
+        <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">45</span>
+        <div className="text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">
+          COMP
+        </div>
+      </div>
+      <div className="w-8 h-0.5 bg-slate-400 my-1.5" />
+      <div className="text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">
+        COMP
+      </div>
+    </div>
+  )
+}
+
+export function TowerDiagramSampleButton() {
+  const [open, setOpen] = useState(false)
+
+  const rows: { box: ReactNode; label: string }[] = [
+    { box: <span className="text-sm font-bold text-slate-900 whitespace-nowrap">1/0</span>, label: 'Loc No.' },
+    { box: <span className="text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">SR</span>, label: 'Tack Welding — mark green only if COMP' },
+    { box: <span className="text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">COMP</span>, label: 'Erection' },
+    { box: <span className="text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">PSNS</span>, label: 'Foundation' },
+    { box: <span className="text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap bg-white text-slate-400 border-slate-200">—</span>, label: 'Earthing — mark green only if COMP' },
+    { box: <span className="text-xs font-semibold text-slate-700 whitespace-nowrap">PS+0</span>, label: 'Type of tower' },
+    { box: <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">45</span>, label: 'Span — to the next tower' },
+    { box: <span className="text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">COMP</span>, label: 'OPGW — on the connector, left and right' },
+    { box: <span className="text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">COMP</span>, label: 'Stringing — on the connector, left and right' },
+  ]
+
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-orange-300 hover:text-orange-700 transition-colors whitespace-nowrap">
+        📊 Sample Tower Diagram
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/50" onClick={() => setOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-900 text-sm">Tower Diagram — Sample</h3>
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-700 p-1">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Illustration — exact same tower + connector markup/classNames as
+                the real Visual Chart tab, connectors flanking both sides. */}
+            <div className="flex items-center justify-center gap-0 border border-slate-200 rounded-lg bg-slate-50/50 py-4 mb-4">
+              <SampleConnector />
+              <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 bg-white">
+                <div className="text-sm font-bold text-slate-900 whitespace-nowrap">1/0</div>
+                <div className="text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">
+                  SR
+                </div>
+                <div className="text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">
+                  COMP
+                </div>
+                <div className="text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">
+                  PSNS
+                </div>
+                <div className="text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap bg-white text-slate-400 border-slate-200">
+                  —
+                </div>
+                <div className="text-xs font-semibold text-slate-700 whitespace-nowrap">PS+0</div>
+              </div>
+              <SampleConnector />
+            </div>
+
+            <div className="border border-slate-200 rounded-lg px-3 py-3 flex flex-col gap-1.5">
+              {rows.map((r, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-[70px] flex justify-center flex-shrink-0">{r.box}</div>
+                  <div className="w-4 h-px bg-slate-300 flex-shrink-0" />
+                  <div className="text-xs text-slate-600">{r.label}</div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-400 mt-4">Every tower in the Visual Chart tab follows this same layout, with a connector like this on either side of it.</p>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -1360,6 +1699,8 @@ export function WorkLogsView({
   isAdmin?: boolean
 }) {
   const [locations, setLocations]       = useState<any[]>(initialLocations)
+  const [draggedLocId, setDraggedLocId] = useState<string | null>(null)
+  const [dragOverLocId, setDragOverLocId] = useState<string | null>(null)
   const [activeTab, setActiveTab]       = useState<'locations' | 'diagram' | 'logs'>('locations')
   const [showAddLoc, setShowAddLoc]     = useState(false)
   const [editingLoc, setEditingLoc]     = useState<any | null>(null)
@@ -1441,8 +1782,10 @@ export function WorkLogsView({
         <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
         <style>
           body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
-          h1 { font-size: 16px; margin: 0 0 4px; }
-          p.sub { font-size: 12px; color: #64748b; margin: 0 0 16px; }
+          .letterhead { text-align: center; margin-bottom: 20px; }
+          .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
+          .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
+          p.sub { font-size: 12px; color: #64748b; margin: 10px 0 16px; text-align: center; }
           table { border-collapse: collapse; width: 100%; font-size: 12px; }
           th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 10px; color: #475569; }
           td { border-bottom: 1px solid #f1f5f9; }
@@ -1450,8 +1793,11 @@ export function WorkLogsView({
         </style>
       </head>
       <body>
-        <h1>${escapeHtmlText(siteName || 'Site')} — Locations</h1>
-        <p class="sub">${locFilter ? escapeHtmlText(locFilter.label) + ' — ' : ''}${displayedLocations.length} tower${displayedLocations.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <div class="letterhead">
+          <h1>JAYPAL ENTERPRISE</h1>
+          <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
+        </div>
+        <p class="sub">Locations · ${locFilter ? escapeHtmlText(locFilter.label) + ' — ' : ''}${displayedLocations.length} tower${displayedLocations.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
         <table>
           <thead><tr>
             <th style="padding:6px 8px;text-align:left;">Location</th>
@@ -1617,12 +1963,39 @@ export function WorkLogsView({
     setCellLoading(null)
   }
 
+  // ── Remarks change (one-tap, from the Remarks column eye/+ icon) ─────
+  async function handleSaveRemark(locId: string, field: 'notes' | 'spanRemarks', value: string) {
+    const result: any = await updateLocationRemarkField(locId, field, value, siteId)
+    if (!result?.error) {
+      setLocations(prev => prev.map(l => l.id === locId ? { ...l, [field]: result[field] } : l))
+    }
+    return result
+  }
+
   // ── Delete location ─────────────────────────────────────────
   async function handleDeleteLoc(id: string, name: string) {
     if (!confirm(`Delete location "${name}"?`)) return
     await deleteSiteLocation(id, siteId)
     setLocations(prev => prev.filter(l => l.id !== id))
     flash('Location deleted')
+  }
+
+  // ── Drag-and-drop row reorder — sets sortOrder, which every other view
+  // (Visual Chart, View Data, Excel/print) reads locations back in. ──────
+  async function handleReorderLocations(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return
+    const fromIndex = locations.findIndex(l => l.id === draggedId)
+    const toIndex   = locations.findIndex(l => l.id === targetId)
+    if (fromIndex === -1 || toIndex === -1) return
+
+    const prevLocations = locations
+    const next = [...locations]
+    const [moved] = next.splice(fromIndex, 1)
+    next.splice(toIndex, 0, moved)
+    setLocations(next)
+
+    const result: any = await reorderSiteLocations(siteId, next.map(l => l.id))
+    if (result?.error) setLocations(prevLocations)
   }
 
   // ── Add work log ────────────────────────────────────────────
@@ -1668,6 +2041,7 @@ export function WorkLogsView({
           billingOptions={billingOptions}
           activeFilter={locFilter}
           onSelectFilter={handleSelectLocFilter}
+          isAdmin={isAdmin}
         />
       )}
 
@@ -1701,7 +2075,7 @@ export function WorkLogsView({
       <div className="flex gap-2 border-b border-slate-200">
         {([
           ['locations', `Locations (${locations.length})`],
-          ['diagram',   'Tower Diagram'],
+          ['diagram',   'Visual Chart'],
           ['logs',      `Work Logs (${logs.length})`],
         ] as const).map(([t, label]) => (
           <button key={t} onClick={() => setActiveTab(t)}
@@ -1861,6 +2235,15 @@ export function WorkLogsView({
               <table className="min-w-full text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-600">
+                    {isAdmin && !locFilter && (
+                      <th className="px-1 py-2 border-b border-slate-200 w-6 text-slate-400" title="Drag rows to reorder">
+                        <svg className="w-4 h-4 mx-auto" fill="currentColor" viewBox="0 0 24 24">
+                          <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
+                          <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
+                          <circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" />
+                        </svg>
+                      </th>
+                    )}
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Location</th>
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Type</th>
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Span</th>
@@ -1882,10 +2265,37 @@ export function WorkLogsView({
                     // necessarily made of adjacent towers, so a "gap to the next one"
                     // wouldn't mean anything.
                     const nextLoc = locFilter ? undefined : locations[i + 1]
+                    // Drag-and-drop reorder is only meaningful against the full,
+                    // unfiltered order — disabled while a Billing Summary filter is active.
+                    const draggableRow = isAdmin && !locFilter
                     return (
                     <Fragment key={loc.id}>
                       {/* Main row — tower's own data, plus Tower Remarks */}
-                      <tr>
+                      <tr
+                        draggable={draggableRow}
+                        onDragStart={draggableRow ? () => setDraggedLocId(loc.id) : undefined}
+                        onDragOver={draggableRow ? (e) => { e.preventDefault(); setDragOverLocId(loc.id) } : undefined}
+                        onDragLeave={draggableRow ? () => setDragOverLocId(prev => prev === loc.id ? null : prev) : undefined}
+                        onDrop={draggableRow ? (e) => {
+                          e.preventDefault()
+                          if (draggedLocId) handleReorderLocations(draggedLocId, loc.id)
+                          setDraggedLocId(null); setDragOverLocId(null)
+                        } : undefined}
+                        onDragEnd={draggableRow ? () => { setDraggedLocId(null); setDragOverLocId(null) } : undefined}
+                        className={
+                          (draggedLocId === loc.id ? 'opacity-40 ' : '') +
+                          (dragOverLocId === loc.id && draggedLocId !== loc.id ? 'bg-orange-50 ' : '')
+                        }
+                      >
+                        {draggableRow && (
+                          <td className="px-1 py-2 text-center align-top cursor-grab active:cursor-grabbing text-slate-500 hover:text-orange-600" title="Drag to reorder">
+                            <svg className="w-5 h-5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
+                              <circle cx="9" cy="6" r="1.8" /><circle cx="15" cy="6" r="1.8" />
+                              <circle cx="9" cy="12" r="1.8" /><circle cx="15" cy="12" r="1.8" />
+                              <circle cx="9" cy="18" r="1.8" /><circle cx="15" cy="18" r="1.8" />
+                            </svg>
+                          </td>
+                        )}
                         <td className="px-2 py-2 text-center align-top font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</td>
                         <td className="px-2 py-2 text-center align-top text-slate-700 whitespace-nowrap">{loc.towerType}</td>
                         <td className="px-2 py-2 text-center align-top text-slate-300">—</td>
@@ -1901,7 +2311,10 @@ export function WorkLogsView({
                             onChange={(stageKey, value) => handleStageChange(loc.id, stageKey, value)}
                             onChangeRa={(stageKey, value) => handleRaChange(loc.id, stageKey, value)} />
                         ))}
-                        <td className="px-2 py-2 text-center align-top text-slate-700"><RemarkPreview raw={loc.notes} label="Tower Remarks" /></td>
+                        <td className="px-2 py-2 text-center align-top text-slate-700">
+                          <RemarkPreview raw={loc.notes} label="Tower Remarks"
+                            onSave={(value) => handleSaveRemark(loc.id, 'notes', value)} />
+                        </td>
                         {isAdmin && (
                           <td className="px-2 py-2 text-center align-top">
                             <div className="flex items-center justify-center gap-2">
@@ -1925,11 +2338,15 @@ export function WorkLogsView({
                           Span Remarks for the span leading to the next tower */}
                       {nextLoc && (
                         <tr className="bg-slate-50/50 text-[11px] leading-tight">
+                          {isAdmin && <td />}
                           <td />
                           <td />
                           <td className="px-2 py-0.5 text-center text-slate-700 font-semibold">{nextLoc.span || '—'}</td>
                           {STAGE_COLUMNS.map(col => <td key={col.key} />)}
-                          <td className="px-2 py-0.5 text-center text-slate-500"><RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks" /></td>
+                          <td className="px-2 py-0.5 text-center text-slate-500">
+                            <RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks"
+                              onSave={(value) => handleSaveRemark(nextLoc.id, 'spanRemarks', value)} />
+                          </td>
                           {isAdmin && <td />}
                         </tr>
                       )}
@@ -1944,7 +2361,7 @@ export function WorkLogsView({
       )}
 
       {/* ── TOWER DIAGRAM TAB ── */}
-      {activeTab === 'diagram' && <TowerDiagramTab locations={locations} />}
+      {activeTab === 'diagram' && <TowerDiagramTab locations={locations} siteName={siteName} />}
 
       {/* ── WORK LOGS TAB ── */}
       {activeTab === 'logs' && (
@@ -2020,7 +2437,7 @@ export function WorkLogsView({
                       <p className="text-orange-700 font-bold text-sm">
                         {(log.quantity ?? 0).toFixed(1)} {log.workType?.unit ?? log.unit}
                       </p>
-                      <p className="text-slate-500 text-xs">{log.date}</p>
+                      <p className="text-slate-500 text-xs">{formatDDMMYYYY(log.date)}</p>
                     </div>
                   </div>
                 ))}
