@@ -191,7 +191,9 @@ async function exportLocationsToExcel(locations: any[], siteName: string, billin
   const sumHeaderRow = sumSheet.addRow(['Stage', 'Total Towers', 'Completed', 'Balance', 'Completed %'])
   sumHeaderRow.eachCell(c => { c.font = { bold: true }; c.alignment = { horizontal: 'center' }; c.border = allBorder })
   for (const col of STAGE_COLUMNS) {
-    const colTotal = stageQty(col, counted)
+    // Span-measured stages total = physical span of ALL towers, matching the
+    // Locations table's Total row; completed still excludes flagged towers.
+    const colTotal = stageQty(col, col.measureBy === 'span' ? locations : counted)
     const completed = stageQty(col, counted.filter(l => col.isCompleted(l[col.statusField])))
     const r = sumSheet.addRow([col.label, colTotal, completed, colTotal - completed, colTotal > 0 ? Math.round((completed / colTotal) * 100) + '%' : '0%'])
     r.eachCell(c => { c.border = allBorder; c.alignment = { horizontal: 'center' } })
@@ -372,7 +374,7 @@ function StageCell({
   const value = loc[col.statusField] ?? ''
   const ra    = col.raField ? (loc[col.raField] ?? '') : ''
   return (
-    <td rowSpan={rowSpan} className="px-1 py-1 align-top text-center border-b border-slate-100">
+    <td rowSpan={rowSpan} className="px-1 py-0.5 align-top text-center border-b border-slate-100">
       <select
         value={value}
         disabled={loading}
@@ -380,7 +382,7 @@ function StageCell({
           if (e.target.value === '__add__') { onAddStatusOption?.(col.key); return }
           onChange(col.key, e.target.value)
         }}
-        className={`w-full text-xs font-bold rounded border px-1 py-1 outline-none disabled:opacity-50 text-center ${optionColor(col, value)}`}
+        className={`w-full text-xs font-bold rounded border px-1 py-0 outline-none disabled:opacity-50 text-center ${optionColor(col, value)}`}
       >
         <option value="">—</option>
         {col.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -395,7 +397,7 @@ function StageCell({
             if (e.target.value === '__add__') { onAddBillingOption(col.key); return }
             onChangeRa(col.key, e.target.value)
           }}
-          className="w-full text-[10px] font-semibold rounded border border-slate-200 bg-white text-slate-600 px-1 py-0.5 mt-0.5 outline-none disabled:opacity-50 text-center"
+          className="w-full text-[10px] font-semibold rounded border border-slate-200 bg-white text-slate-600 px-1 py-0 mt-0.5 outline-none disabled:opacity-50 text-center"
         >
           <option value="">Billing —</option>
           {billingOptions.map(o => <option key={o} value={o}>{o}</option>)}
@@ -507,7 +509,9 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
 // When `onSave` is given (the main, per-row Locations table) the modal also
 // offers an "Edit" mode so remarks can be added/changed without opening the
 // full Edit Location form — available to supervisors too, not just admins.
-function RemarkPreview({ raw, label, onSave }: { raw: string; label: string; onSave?: (value: string) => Promise<any> }) {
+function RemarkPreview({ raw, label, onSave, compact = false }: { raw: string; label: string; onSave?: (value: string) => Promise<any>; compact?: boolean }) {
+  const btnPad = compact ? 'p-0' : 'p-0.5'
+  const icoSize = 'w-3 h-3'
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
@@ -533,16 +537,16 @@ function RemarkPreview({ raw, label, onSave }: { raw: string; label: string; onS
       <span className="inline-flex max-w-full items-center justify-center">
         {hasContent ? (
           <button type="button" onClick={openView} title={`View ${label}`}
-            className="text-slate-400 hover:text-slate-700 p-1 flex-shrink-0">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            className={`text-slate-400 hover:text-slate-700 ${btnPad} flex-shrink-0`}>
+            <svg className={icoSize} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </button>
         ) : editable && (
           <button type="button" onClick={openAdd} title={`Add ${label}`}
-            className="text-slate-400 hover:text-slate-700 p-1 flex-shrink-0">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            className={`text-slate-400 hover:text-slate-700 ${btnPad} flex-shrink-0`}>
+            <svg className={icoSize} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
           </button>
@@ -860,6 +864,84 @@ function LocationsDataModal({
   const counted = locations.filter(l => !l.excludeFromTotal)
   const billedCols = STAGE_COLUMNS.filter(c => c.raField)
 
+  // Prints every location (same columns as the Locations table below, minus
+  // Remarks), with the span row between towers and the Total row.
+  function handlePrintLocations() {
+    const win = window.open('', '_blank', 'width=1200,height=800')
+    if (!win) return
+    const th = (t: string) => `<th style="padding:5px 6px;text-align:center;">${escapeHtmlText(t)}</th>`
+    // Towers marked "Don't include in total" are left out of the printout entirely
+    const printable = counted
+    const rows = printable.map((loc, i) => {
+      const next = printable[i + 1]
+      const stageCells = STAGE_COLUMNS.map(col => {
+        const value = loc[col.statusField] || ''
+        const date = loc[col.dateField] || ''
+        return `<td style="padding:4px 6px;text-align:center;">
+          <span style="display:inline-block;min-width:56px;padding:2px 6px;border-radius:4px;font-weight:700;font-size:11px;${printColorStyle(col, value)}">${escapeHtmlText(value || '—')}</span>
+          <div style="font-size:9px;color:#64748b;min-height:11px;">${date ? escapeHtmlText(formatDDMMYYYY(date)) : ''}</div>
+        </td>`
+      }).join('')
+      const main = `<tr style="page-break-inside:avoid;">
+        <td style="padding:4px 6px;text-align:center;">${i + 1}</td>
+        <td style="padding:4px 6px;text-align:center;font-weight:700;white-space:nowrap;">${escapeHtmlText(loc.locationNo)}</td>
+        <td style="padding:4px 6px;text-align:center;white-space:nowrap;">${escapeHtmlText(loc.towerType)}</td>
+        <td style="padding:4px 6px;text-align:center;color:#cbd5e1;">—</td>
+        ${stageCells}
+      </tr>`
+      const spanRow = next ? `<tr style="background:#f8fafc;font-size:10px;page-break-inside:avoid;">
+        <td></td><td></td><td></td>
+        <td style="padding:1px 6px;text-align:center;font-weight:600;">${escapeHtmlText(next.span || '—')}</td>
+        <td colspan="${STAGE_COLUMNS.length}"></td>
+      </tr>` : ''
+      return main + spanRow
+    }).join('')
+    const spanTotal = printable.reduce((sum, l) => sum + (Number(l.span) || 0), 0)
+    const totalCells = STAGE_COLUMNS.map(col =>
+      `<td style="padding:5px 6px;text-align:center;">${stageQty(col, counted.filter(l => col.isCompleted(l[col.statusField])))}</td>`).join('')
+
+    win.document.write(`<!DOCTYPE html>
+      <html>
+      <head>
+        <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
+        <style>
+          body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
+          .letterhead { text-align: center; margin-bottom: 20px; }
+          .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
+          .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
+          p.sub { font-size: 12px; color: #64748b; margin: 10px 0 16px; text-align: center; }
+          table { border-collapse: collapse; width: 100%; font-size: 12px; }
+          thead { display: table-header-group; }
+          th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-weight: 700; font-size: 10px; color: #475569; }
+          td { border-bottom: 1px solid #f1f5f9; }
+          /* margin:0 on @page makes browsers drop their own header/footer (about:blank, date, page no.) */
+          @page { margin: 0; }
+          @media print { body { padding: 12mm; } }
+        </style>
+      </head>
+      <body>
+        <div class="letterhead">
+          <h1>JAYPAL ENTERPRISE</h1>
+          <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
+        </div>
+        <p class="sub">Locations · ${printable.length} tower${printable.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <table>
+          <thead><tr>${th('Sr No.')}${th('Loc No.')}${th('Tower type')}${th('Span')}${STAGE_COLUMNS.map(c => th(c.label)).join('')}</tr></thead>
+          <tbody>${rows}
+            <tr style="background:#f8fafc;font-weight:700;">
+              <td colspan="3" style="padding:5px 6px;text-align:center;">Total</td>
+              <td style="padding:5px 6px;text-align:center;">${spanTotal}</td>
+              ${totalCells}
+            </tr>
+          </tbody>
+        </table>
+      </body>
+      </html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { try { win.print() } catch { /* user can print manually */ } }, 300)
+  }
+
   // Renders a Billing Summary count as a clickable filter toggle — 0 stays plain text.
   function CountCell({ value, className = 'text-slate-700', filterProps }: {
     value: number
@@ -881,7 +963,9 @@ function LocationsDataModal({
   // Progress Summary (mirrors "Progress Summary" sheet). Stringing/OPGW rows are
   // measured in total span (conductor length) completed, not tower count — see stageQty().
   const progressRows = STAGE_COLUMNS.map(col => {
-    const colTotal = stageQty(col, counted)
+    // Span-measured stages total = physical span of ALL towers, matching the
+    // Locations table's Total row; completed still excludes flagged towers.
+    const colTotal = stageQty(col, col.measureBy === 'span' ? locations : counted)
     const completed = stageQty(col, counted.filter(l => col.isCompleted(l[col.statusField])))
     return {
       label: col.label,
@@ -921,11 +1005,14 @@ function LocationsDataModal({
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 sticky top-0 bg-white z-10">
           <h3 className="font-bold text-slate-900">{siteName ? `${siteName} — ` : ''}Locations Data</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={handlePrintLocations} className="btn-secondary text-xs">🖨 Print Locations</button>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div className="p-5 space-y-6">
@@ -935,9 +1022,14 @@ function LocationsDataModal({
               instead of this one. */}
           <section>
             <h4 className="font-bold text-slate-800 text-sm mb-2">Locations</h4>
-            <div className="overflow-x-auto border border-slate-200 rounded-lg">
-              <table className="min-w-full text-xs border-collapse">
-                <thead>
+            <div className="overflow-y-auto overflow-x-hidden max-h-[60vh] border border-slate-200 rounded-lg">
+              <table className="text-xs border-collapse table-fixed w-full">
+                <colgroup>
+                  <col style={{ width: '5%' }} /><col style={{ width: '6%' }} /><col style={{ width: '7%' }} /><col style={{ width: '5%' }} />
+                  {STAGE_COLUMNS.map(c => <col key={c.key} style={{ width: `${(100 - 23) / STAGE_COLUMNS.length}%` }} />)}
+                  <col style={{ width: '6%' }} />
+                </colgroup>
+                <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[inset_0_-1px_0_#e2e8f0]">
                   <tr className="bg-slate-50 text-slate-600">
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Sr No.</th>
                     <th className="px-2 py-2 text-center font-bold border-b border-slate-200 whitespace-nowrap">Loc No.</th>
@@ -980,13 +1072,13 @@ function LocationsDataModal({
                       {/* Extra row — otherwise empty, carrying only the Span value and
                           Span Remarks for the span leading to the next tower */}
                       {nextLoc && (
-                        <tr className="bg-slate-50/50 text-[11px] leading-tight">
+                        <tr className="bg-slate-50/50 text-[10px] leading-none h-4">
                           <td />
                           <td />
                           <td />
-                          <td className="px-2 py-0.5 text-center text-slate-700 font-semibold">{nextLoc.span || '—'}</td>
+                          <td className="px-2 py-0 text-center text-slate-700 font-semibold leading-none">{nextLoc.span || '—'}</td>
                           {STAGE_COLUMNS.map(col => <td key={col.key} />)}
-                          <td className="px-2 py-0.5 text-center text-slate-500"><RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks" /></td>
+                          <td className="px-2 py-0 text-center text-slate-500 leading-none"><RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks" compact /></td>
                         </tr>
                       )}
                     </Fragment>
@@ -1196,6 +1288,9 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
     const cellStyle = (col: typeof STAGE_COLUMNS[number], value: string, thick?: boolean) =>
       `display:inline-block;min-width:${thick ? '64px' : '56px'};padding:${thick ? '5px 8px' : '2px 6px'};border-radius:4px;font-weight:700;font-size:${thick ? '11px' : '10px'};text-align:center;box-sizing:border-box;${printColorStyle(col, value)}${thick ? ';border-width:2px;border-color:#1e293b' : ''}`
 
+    // Tower count excludes towers flagged "Don't include in total towers" (still drawn in the chart)
+    const countedTowers = locations.filter(l => !l.excludeFromTotal).length
+
     const itemsHtml = locations.map((loc, i) => {
       const startsRow = i % DIAGRAM_ROW_SIZE === 0
       const connectorHtml = !startsRow ? `
@@ -1208,10 +1303,10 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
       const towerHtml = `
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;background:#fff;">
           <div style="font-size:14px;font-weight:700;white-space:nowrap;">${escapeHtmlText(loc.locationNo)}</div>
-          <div style="${cellStyle(tackWeldingCol!, loc[tackWeldingCol!.statusField] || '')}">${escapeHtmlText(loc[tackWeldingCol!.statusField] || '—')}</div>
+          <div style="width:64px;height:6px;border-radius:2px;box-sizing:border-box;${printColorStyle(tackWeldingCol!, loc[tackWeldingCol!.statusField] || '')}"></div>
           <div style="${cellStyle(erectionCol!, loc[erectionCol!.statusField] || '', true)}">${escapeHtmlText(loc[erectionCol!.statusField] || '—')}</div>
           <div style="${cellStyle(foundationCol!, loc[foundationCol!.statusField] || '', true)}">${escapeHtmlText(loc[foundationCol!.statusField] || '—')}</div>
-          <div style="${cellStyle(earthingCol!, loc[earthingCol!.statusField] || '')}">${escapeHtmlText(loc[earthingCol!.statusField] || '—')}</div>
+          <div style="width:64px;height:6px;border-radius:2px;box-sizing:border-box;${printColorStyle(earthingCol!, loc[earthingCol!.statusField] || '')}"></div>
           <div style="font-size:11px;font-weight:600;color:#334155;white-space:nowrap;">${escapeHtmlText(loc.towerType)}</div>
         </div>`
       return `<div style="display:flex;align-items:center;">${connectorHtml}${towerHtml}</div>`
@@ -1228,7 +1323,9 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
           .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
           p.sub { font-size: 12px; color: #64748b; margin: 10px 0 16px; text-align: center; }
           .grid { display: grid; grid-template-columns: repeat(${DIAGRAM_ROW_SIZE}, max-content); row-gap: 20px; column-gap: 0; }
-          @media print { body { padding: 0; } }
+          /* margin:0 on @page makes browsers drop their own header/footer (about:blank, date, page no.) */
+          @page { margin: 0; }
+          @media print { body { padding: 12mm; } }
         </style>
       </head>
       <body>
@@ -1236,7 +1333,7 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
           <h1>JAYPAL ENTERPRISE</h1>
           <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
         </div>
-        <p class="sub">Visual Chart · ${locations.length} tower${locations.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <p class="sub">Visual Chart · ${countedTowers} tower${countedTowers === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
         <div class="grid">${itemsHtml}</div>
       </body>
       </html>`)
@@ -1292,18 +1389,14 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
               )}
               <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 bg-white">
                 <div className="text-sm font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</div>
-                <div className={`text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap ${optionColor(tackWeldingCol, loc[tackWeldingCol.statusField])}`}>
-                  {loc[tackWeldingCol.statusField] || '—'}
-                </div>
+                <div title={loc[tackWeldingCol.statusField] || '—'} className={`h-1.5 w-16 border rounded-sm ${optionColor(tackWeldingCol, loc[tackWeldingCol.statusField])}`} />
                 <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap ${optionColor(erectionCol, loc[erectionCol.statusField])}`}>
                   {loc[erectionCol.statusField] || '—'}
                 </div>
                 <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap ${optionColor(foundationCol, loc[foundationCol.statusField])}`}>
                   {loc[foundationCol.statusField] || '—'}
                 </div>
-                <div className={`text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap ${optionColor(earthingCol, loc[earthingCol.statusField])}`}>
-                  {loc[earthingCol.statusField] || '—'}
-                </div>
+                <div title={loc[earthingCol.statusField] || '—'} className={`h-1.5 w-16 border rounded-sm ${optionColor(earthingCol, loc[earthingCol.statusField])}`} />
                 <div className="text-xs font-semibold text-slate-700 whitespace-nowrap">{loc.towerType}</div>
               </div>
             </div>
@@ -1344,7 +1437,7 @@ export function TowerDiagramSampleButton() {
 
   const rows: { box: ReactNode; label: string }[] = [
     { box: <span className="text-sm font-bold text-slate-900 whitespace-nowrap">1/0</span>, label: 'Loc No.' },
-    { box: <span className="text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">SR</span>, label: 'Tack Welding — mark green only if COMP' },
+    { box: <span className="block h-1.5 w-16 border rounded-sm bg-emerald-50 border-emerald-300" />, label: 'Tack Welding — mark green only if COMP' },
     { box: <span className="text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">COMP</span>, label: 'Erection' },
     { box: <span className="text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-300">PSNS</span>, label: 'Foundation' },
     { box: <span className="text-[10px] font-bold border rounded px-1.5 py-0 leading-[18px] min-w-[64px] text-center whitespace-nowrap bg-white text-slate-400 border-slate-200">—</span>, label: 'Earthing — mark green only if COMP' },
@@ -1491,14 +1584,14 @@ function BillingOptionsModal({
                       <button type="button" title="Rename" disabled={busyId === o.id}
                         onClick={() => { setEditingId(o.id); setEditValue(o.name) }}
                         className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
                       </button>
                       <button type="button" title="Delete" disabled={busyId === o.id}
                         onClick={() => handleDelete(o.id, o.name)}
                         className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                         </svg>
                       </button>
@@ -1634,14 +1727,14 @@ function StatusOptionsModal({
                       <button type="button" title="Rename" disabled={busyId === o.id}
                         onClick={() => { setEditingId(o.id); setEditValue(o.name) }}
                         className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
                       </button>
                       <button type="button" title="Delete" disabled={busyId === o.id}
                         onClick={() => handleDelete(o.id, o.name)}
                         className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                         </svg>
                       </button>
@@ -2076,7 +2169,7 @@ export function WorkLogsView({
         {([
           ['locations', `Locations (${locations.length})`],
           ['diagram',   'Visual Chart'],
-          ['logs',      `Work Logs (${logs.length})`],
+          // Work Logs tab hidden for now — its content below is kept, just unreachable
         ] as const).map(([t, label]) => (
           <button key={t} onClick={() => setActiveTab(t)}
             className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
@@ -2231,13 +2324,20 @@ export function WorkLogsView({
               <button onClick={() => setLocFilter(null)} className="btn-secondary">✕ Reset Filter</button>
             </div>
           ) : (
-            <div className="card overflow-x-auto">
-              <table className="min-w-full text-xs border-collapse">
-                <thead>
+            <div className="card overflow-y-auto overflow-x-hidden max-h-[70vh]">
+              <table className="text-xs border-collapse table-fixed w-full">
+                <colgroup>
+                  {isAdmin && !locFilter && <col style={{ width: '2%' }} />}
+                  <col style={{ width: '6%' }} /><col style={{ width: '7%' }} /><col style={{ width: '5%' }} />
+                  {STAGE_COLUMNS.map(c => <col key={c.key} style={{ width: `${(100 - 18 - (isAdmin ? 6 : 0) - (isAdmin && !locFilter ? 2 : 0)) / STAGE_COLUMNS.length}%` }} />)}
+                  <col style={{ width: '6%' }} />
+                  {isAdmin && <col style={{ width: '6%' }} />}
+                </colgroup>
+                <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[inset_0_-1px_0_#e2e8f0]">
                   <tr className="bg-slate-50 text-slate-600">
                     {isAdmin && !locFilter && (
                       <th className="px-1 py-2 border-b border-slate-200 w-6 text-slate-400" title="Drag rows to reorder">
-                        <svg className="w-4 h-4 mx-auto" fill="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3.5 h-3.5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
                           <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
                           <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
                           <circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" />
@@ -2288,17 +2388,17 @@ export function WorkLogsView({
                         }
                       >
                         {draggableRow && (
-                          <td className="px-1 py-2 text-center align-top cursor-grab active:cursor-grabbing text-slate-500 hover:text-orange-600" title="Drag to reorder">
-                            <svg className="w-5 h-5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
+                          <td className="px-1 py-0.5 text-center align-top cursor-grab active:cursor-grabbing text-slate-500 hover:text-orange-600" title="Drag to reorder">
+                            <svg className="w-3.5 h-3.5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
                               <circle cx="9" cy="6" r="1.8" /><circle cx="15" cy="6" r="1.8" />
                               <circle cx="9" cy="12" r="1.8" /><circle cx="15" cy="12" r="1.8" />
                               <circle cx="9" cy="18" r="1.8" /><circle cx="15" cy="18" r="1.8" />
                             </svg>
                           </td>
                         )}
-                        <td className="px-2 py-2 text-center align-top font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</td>
-                        <td className="px-2 py-2 text-center align-top text-slate-700 whitespace-nowrap">{loc.towerType}</td>
-                        <td className="px-2 py-2 text-center align-top text-slate-300">—</td>
+                        <td className="px-2 py-0.5 text-center align-top font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</td>
+                        <td className="px-2 py-0.5 text-center align-top text-slate-700 whitespace-nowrap">{loc.towerType}</td>
+                        <td className="px-2 py-0.5 text-center align-top text-slate-300">—</td>
                         {STAGE_COLUMNS.map(col => (
                           <StageCell key={col.key} col={col} loc={loc}
                             loading={cellLoading === `${loc.id}:${col.key}`}
@@ -2311,22 +2411,22 @@ export function WorkLogsView({
                             onChange={(stageKey, value) => handleStageChange(loc.id, stageKey, value)}
                             onChangeRa={(stageKey, value) => handleRaChange(loc.id, stageKey, value)} />
                         ))}
-                        <td className="px-2 py-2 text-center align-top text-slate-700">
+                        <td className="px-2 py-0.5 text-center align-top text-slate-700">
                           <RemarkPreview raw={loc.notes} label="Tower Remarks"
                             onSave={(value) => handleSaveRemark(loc.id, 'notes', value)} />
                         </td>
                         {isAdmin && (
-                          <td className="px-2 py-2 text-center align-top">
-                            <div className="flex items-center justify-center gap-2">
+                          <td className="px-2 py-0.5 text-center align-top">
+                            <div className="flex items-center justify-center gap-1">
                               <button onClick={() => { setEditingLoc(loc); setShowAddLoc(false) }}
-                                className="text-slate-400 hover:text-slate-700 transition-colors p-1">
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                className="text-slate-400 hover:text-slate-700 transition-colors p-0.5">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                                 </svg>
                               </button>
                               <button onClick={() => handleDeleteLoc(loc.id, loc.locationNo)}
-                                className="text-slate-400 hover:text-red-600 transition-colors p-1">
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                className="text-slate-400 hover:text-red-600 transition-colors p-0.5">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                 </svg>
                               </button>
@@ -2337,14 +2437,14 @@ export function WorkLogsView({
                       {/* Extra row — otherwise empty, carrying only the Span value and
                           Span Remarks for the span leading to the next tower */}
                       {nextLoc && (
-                        <tr className="bg-slate-50/50 text-[11px] leading-tight">
+                        <tr className="bg-slate-50/50 text-[10px] leading-none h-4">
                           {isAdmin && <td />}
                           <td />
                           <td />
-                          <td className="px-2 py-0.5 text-center text-slate-700 font-semibold">{nextLoc.span || '—'}</td>
+                          <td className="px-2 py-0 text-center text-slate-700 font-semibold leading-none">{nextLoc.span || '—'}</td>
                           {STAGE_COLUMNS.map(col => <td key={col.key} />)}
-                          <td className="px-2 py-0.5 text-center text-slate-500">
-                            <RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks"
+                          <td className="px-2 py-0 text-center text-slate-500 leading-none">
+                            <RemarkPreview raw={nextLoc.spanRemarks} label="Span Remarks" compact
                               onSave={(value) => handleSaveRemark(nextLoc.id, 'spanRemarks', value)} />
                           </td>
                           {isAdmin && <td />}
