@@ -51,6 +51,13 @@ function formatDDMMYYYY(value: unknown) {
   return `${m[3]}-${m[2]}-${m[1]}`
 }
 
+// Today's date as "dd-mm-yyyy" in the device's local time — fixed format, so a
+// printout looks the same from a phone and from a computer (unlike toLocaleDateString()).
+function todayDDMMYYYY() {
+  const d = new Date()
+  return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`
+}
+
 // Inline-CSS equivalent of optionColor()'s Tailwind classes, for the print
 // window (a bare document.write()'d page has no access to the app's stylesheet).
 const PRINT_COLOR_STYLES: Record<string, string> = {
@@ -222,7 +229,7 @@ async function exportLocationsToExcel(locations: any[], siteName: string, billin
   }
 
   // ── WORKED block ── (Stringing/OPGW columns are span sums — see stageQty())
-  const workedTotals   = billedCols.map(c => stageQty(c, counted))
+  const workedTotals   = billedCols.map(c => stageQty(c, c.measureBy === 'span' ? locations : counted))
   const workedCompleted = billedCols.map(c => stageQty(c, counted.filter(l => c.isCompleted(l[c.statusField]))))
   const workedStartRow = billSheet.rowCount + 1
   billRow('LOI QTY',   workedTotals)
@@ -905,6 +912,7 @@ function LocationsDataModal({
       <head>
         <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
         <style>
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
           .letterhead { text-align: center; margin-bottom: 20px; }
           .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
@@ -924,7 +932,7 @@ function LocationsDataModal({
           <h1>JAYPAL ENTERPRISE</h1>
           <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
         </div>
-        <p class="sub">Locations · ${printable.length} tower${printable.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <p class="sub">Locations · ${printable.length} tower${printable.length === 1 ? '' : 's'} · Printed ${todayDDMMYYYY()}</p>
         <table>
           <thead><tr>${th('Sr No.')}${th('Loc No.')}${th('Tower type')}${th('Span')}${STAGE_COLUMNS.map(c => th(c.label)).join('')}</tr></thead>
           <tbody>${rows}
@@ -977,7 +985,7 @@ function LocationsDataModal({
   })
 
   // Billing Summary (mirrors "Billing Summary" sheet)
-  const workedTotals = billedCols.map(c => stageQty(c, counted))
+  const workedTotals = billedCols.map(c => stageQty(c, c.measureBy === 'span' ? locations : counted))
   const worked = billedCols.map(c => ({
     completed: stageQty(c, counted.filter(l => c.isCompleted(l[c.statusField]))),
   }))
@@ -1293,13 +1301,16 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
 
     const itemsHtml = locations.map((loc, i) => {
       const startsRow = i % DIAGRAM_ROW_SIZE === 0
-      const connectorHtml = !startsRow ? `
+      const connectorFor = (l: any) => `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 8px;min-width:64px;">
-          <div style="font-size:10px;font-weight:700;color:#64748b;white-space:nowrap;">${escapeHtmlText(loc.span || '—')}</div>
-          <div style="${cellStyle(opgwCol!, loc[opgwCol!.statusField] || '')}">${escapeHtmlText(loc[opgwCol!.statusField] || '—')}</div>
+          <div style="font-size:10px;font-weight:700;color:#64748b;white-space:nowrap;">${escapeHtmlText(l.span || '—')}</div>
+          <div style="${cellStyle(opgwCol!, l[opgwCol!.statusField] || '')}">${escapeHtmlText(l[opgwCol!.statusField] || '—')}</div>
           <div style="width:32px;height:1px;background:#94a3b8;margin:6px 0;"></div>
-          <div style="${cellStyle(stringingCol!, loc[stringingCol!.statusField] || '')}">${escapeHtmlText(loc[stringingCol!.statusField] || '—')}</div>
-        </div>` : ''
+          <div style="${cellStyle(stringingCol!, l[stringingCol!.statusField] || '')}">${escapeHtmlText(l[stringingCol!.statusField] || '—')}</div>
+        </div>`
+      const connectorHtml = !startsRow ? connectorFor(loc) : ''
+      // last tower of a row: also show the span leading to the first tower of the next row
+      const trailingHtml = (i % DIAGRAM_ROW_SIZE === DIAGRAM_ROW_SIZE - 1 && locations[i + 1]) ? connectorFor(locations[i + 1]) : ''
       const towerHtml = `
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;background:#fff;">
           <div style="font-size:14px;font-weight:700;white-space:nowrap;">${escapeHtmlText(loc.locationNo)}</div>
@@ -1309,7 +1320,7 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
           <div style="width:64px;height:6px;border-radius:2px;box-sizing:border-box;${printColorStyle(earthingCol!, loc[earthingCol!.statusField] || '')}"></div>
           <div style="font-size:11px;font-weight:600;color:#334155;white-space:nowrap;">${escapeHtmlText(loc.towerType)}</div>
         </div>`
-      return `<div style="display:flex;align-items:center;">${connectorHtml}${towerHtml}</div>`
+      return `<div style="display:flex;align-items:center;">${connectorHtml}${towerHtml}${trailingHtml}</div>`
     }).join('')
 
     win.document.write(`<!DOCTYPE html>
@@ -1317,6 +1328,7 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
       <head>
         <title>${escapeHtmlText(siteName || 'Site')} — Visual Chart</title>
         <style>
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
           .letterhead { text-align: center; margin-bottom: 20px; }
           .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
@@ -1333,7 +1345,7 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
           <h1>JAYPAL ENTERPRISE</h1>
           <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
         </div>
-        <p class="sub">Visual Chart · ${countedTowers} tower${countedTowers === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <p class="sub">Visual Chart · ${countedTowers} tower${countedTowers === 1 ? '' : 's'} · Printed ${todayDDMMYYYY()}</p>
         <div class="grid">${itemsHtml}</div>
       </body>
       </html>`)
@@ -1350,6 +1362,23 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
     )
   }
 
+  // Connector between two towers: span + OPGW above the line, Stringing below.
+  // It describes the gap leading INTO `l` (the tower after the gap).
+  const renderConnector = (l: any) => (
+    <div className="flex flex-col items-center justify-center px-1 min-w-[56px]">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{l.span || '—'}</span>
+                        <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(opgwCol, l[opgwCol.statusField])}`}>
+                          {l[opgwCol.statusField] || '—'}
+                        </div>
+                      </div>
+                      <div className="w-8 h-0.5 bg-slate-400 my-1.5" />
+                      <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(stringingCol, l[stringingCol.statusField])}`}>
+                        {l[stringingCol.statusField] || '—'}
+                      </div>
+                    </div>
+  )
+
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
@@ -1357,7 +1386,7 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
           🖨 Print
         </button>
       </div>
-      <div className="card p-5 overflow-x-auto">
+      <div className="card p-4 overflow-x-auto">
       <div className="grid gap-y-5 items-center" style={{ gridTemplateColumns: `repeat(${DIAGRAM_ROW_SIZE}, max-content)` }}>
         {locations.map((loc, i) => {
           // Every DIAGRAM_ROW_SIZE-th tower starts a new grid row — its connector
@@ -1367,27 +1396,8 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
           const startsRow = i % DIAGRAM_ROW_SIZE === 0
           return (
             <div key={loc.id} className="flex items-center">
-              {!startsRow && (
-                // Stringing/OPGW are conductor runs strung BETWEEN two towers, not a
-                // property of either one — shown here in the connector, next to the
-                // span, the same way Excel's "span"-row does. loc.stringingStatus /
-                // loc.opgwStatus (on the tower AFTER the gap) describe this same gap,
-                // matching the span convention (see the Locations table). Span+OPGW
-                // sit above the connector line, Stringing below it.
-                <div className="flex flex-col items-center justify-center px-2 min-w-[64px]">
-                  <div className="flex flex-col items-center gap-1">
-                    <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{loc.span || '—'}</span>
-                    <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(opgwCol, loc[opgwCol.statusField])}`}>
-                      {loc[opgwCol.statusField] || '—'}
-                    </div>
-                  </div>
-                  <div className="w-8 h-0.5 bg-slate-400 my-1.5" />
-                  <div className={`text-[10px] font-bold border rounded px-1.5 py-0.5 min-w-[56px] text-center whitespace-nowrap ${optionColor(stringingCol, loc[stringingCol.statusField])}`}>
-                    {loc[stringingCol.statusField] || '—'}
-                  </div>
-                </div>
-              )}
-              <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 bg-white">
+              {!startsRow && renderConnector(loc)}
+              <div className="flex flex-col items-center gap-1 border border-slate-200 rounded-lg px-2 py-2 bg-white">
                 <div className="text-sm font-bold text-slate-900 whitespace-nowrap">{loc.locationNo}</div>
                 <div title={loc[tackWeldingCol.statusField] || '—'} className={`h-1.5 w-16 border rounded-sm ${optionColor(tackWeldingCol, loc[tackWeldingCol.statusField])}`} />
                 <div className={`text-xs font-bold border-2 border-slate-800 rounded px-2 py-0 leading-[22px] min-w-[64px] text-center whitespace-nowrap ${optionColor(erectionCol, loc[erectionCol.statusField])}`}>
@@ -1399,6 +1409,8 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
                 <div title={loc[earthingCol.statusField] || '—'} className={`h-1.5 w-16 border rounded-sm ${optionColor(earthingCol, loc[earthingCol.statusField])}`} />
                 <div className="text-xs font-semibold text-slate-700 whitespace-nowrap">{loc.towerType}</div>
               </div>
+              {/* last tower of a row: the span leading to the first tower of the next row */}
+              {i % DIAGRAM_ROW_SIZE === DIAGRAM_ROW_SIZE - 1 && locations[i + 1] && renderConnector(locations[i + 1])}
             </div>
           )
         })}
@@ -1874,6 +1886,7 @@ export function WorkLogsView({
       <head>
         <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
         <style>
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
           .letterhead { text-align: center; margin-bottom: 20px; }
           .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
@@ -1882,7 +1895,9 @@ export function WorkLogsView({
           table { border-collapse: collapse; width: 100%; font-size: 12px; }
           th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 10px; color: #475569; }
           td { border-bottom: 1px solid #f1f5f9; }
-          @media print { body { padding: 0; } }
+          /* margin:0 on @page makes browsers drop their own header/footer (about:blank, date, page no.) */
+          @page { margin: 0; }
+          @media print { body { padding: 12mm; } }
         </style>
       </head>
       <body>
@@ -1890,7 +1905,7 @@ export function WorkLogsView({
           <h1>JAYPAL ENTERPRISE</h1>
           <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
         </div>
-        <p class="sub">Locations · ${locFilter ? escapeHtmlText(locFilter.label) + ' — ' : ''}${displayedLocations.length} tower${displayedLocations.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString()}</p>
+        <p class="sub">Locations · ${locFilter ? escapeHtmlText(locFilter.label) + ' — ' : ''}${displayedLocations.length} tower${displayedLocations.length === 1 ? '' : 's'} · Printed ${todayDDMMYYYY()}</p>
         <table>
           <thead><tr>
             <th style="padding:6px 8px;text-align:left;">Location</th>
