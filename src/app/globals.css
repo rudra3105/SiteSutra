@@ -3,7 +3,6 @@
 @tailwind utilities;
 
 @layer base {
-  :root { --font-sans: system-ui, sans-serif; }
   * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
 
@@ -12,7 +11,7 @@
     color: #1e293b;
     min-height: 100vh;
     min-height: 100dvh;
-    font-family: var(--font-sans);
+    font-family: var(--font-sans), Roboto, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 

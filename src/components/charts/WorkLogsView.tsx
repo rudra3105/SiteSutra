@@ -19,6 +19,7 @@ import {
 } from '@/actions/locations'
 import { createWorkLog } from '@/actions/worklogs'
 import { STAGE_COLUMNS, FIXED_STAGE_OPTIONS } from '@/lib/stages'
+import { ROBOTO_LINK, PRINT_FONT, printWhenReady } from '@/lib/print'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -912,10 +913,11 @@ function LocationsDataModal({
     win.document.write(`<!DOCTYPE html>
       <html>
       <head>
+        ${ROBOTO_LINK}
         <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
         <style>
           * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
+          body { font-family: ${PRINT_FONT}; padding: 24px; color: #0f172a; }
           .letterhead { text-align: center; margin-bottom: 20px; }
           .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
           .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
@@ -949,7 +951,7 @@ function LocationsDataModal({
       </html>`)
     win.document.close()
     win.focus()
-    setTimeout(() => { try { win.print() } catch { /* user can print manually */ } }, 300)
+    printWhenReady(win)
   }
 
   // Renders a Billing Summary count as a clickable filter toggle — 0 stays plain text.
@@ -1328,10 +1330,11 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
     win.document.write(`<!DOCTYPE html>
       <html>
       <head>
+        ${ROBOTO_LINK}
         <title>${escapeHtmlText(siteName || 'Site')} — Visual Chart</title>
         <style>
           * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
+          body { font-family: ${PRINT_FONT}; padding: 24px; color: #0f172a; }
           .letterhead { text-align: center; margin-bottom: 20px; }
           .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
           .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
@@ -1353,7 +1356,7 @@ function TowerDiagramTab({ locations, siteName }: { locations: any[]; siteName?:
       </html>`)
     win.document.close()
     win.focus()
-    setTimeout(() => { try { win.print() } catch { /* user can print manually */ } }, 300)
+    printWhenReady(win)
   }
 
   if (locations.length === 0) {
@@ -1886,10 +1889,11 @@ export function WorkLogsView({
     win.document.write(`<!DOCTYPE html>
       <html>
       <head>
+        ${ROBOTO_LINK}
         <title>${escapeHtmlText(siteName || 'Site')} — Locations</title>
         <style>
           * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          body { font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 24px; color: #0f172a; }
+          body { font-family: ${PRINT_FONT}; padding: 24px; color: #0f172a; }
           .letterhead { text-align: center; margin-bottom: 20px; }
           .letterhead h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: .02em; }
           .letterhead p.site { font-size: 15px; font-weight: 600; margin: 4px 0 0; color: #334155; }
@@ -1922,7 +1926,7 @@ export function WorkLogsView({
       </html>`)
     win.document.close()
     win.focus()
-    setTimeout(() => { try { win.print() } catch { /* user can print manually */ } }, 300)
+    printWhenReady(win)
   }
 
   // ── Manage custom billing options (add / rename / delete) ───────────────

@@ -33,7 +33,7 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        sans: ['var(--font-sans)', 'Roboto', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'monospace'],
       },
       screens: { xs: '380px' },

@@ -12,6 +12,7 @@ import {
   getBookSupervisors, setBookSupervisor,
   getAllEntriesBySite, getSiteCategories,
 } from '@/actions/cashbook'
+import { ROBOTO_LINK, PRINT_FONT, printWhenReady } from '@/lib/print'
 
 // ── Constants ─────────────────────────────────────────────────
 const PARTY_TYPES        = ['Client', 'Supplier', 'Contractor', 'Labour Contractor', 'Transporter', 'Other']
@@ -746,10 +747,10 @@ export function exportToPDF(entries: any[], bookName: string, summary: any, part
     </tr>`
   }).join('')
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bookName}</title>
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bookName}</title>${ROBOTO_LINK}
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;font-size:11px;color:#0f172a;padding:24px}
+  body{font-family:${PRINT_FONT};font-size:11px;color:#0f172a;padding:24px}
   .header{display:flex;align-items:center;gap:14px;background:#f8fafc;border-radius:10px;padding:14px 18px;margin-bottom:20px}
   .logo{width:42px;height:42px;object-fit:contain;border-radius:8px;flex-shrink:0;background:#fff}
   .title{font-size:17px;font-weight:700;color:#0f172a}
@@ -796,7 +797,7 @@ ${from && to ? `<div class="period">Report Period: ${from} to ${to}</div>` : ''}
   const blob = new Blob([html], { type: 'text/html' })
   const url  = URL.createObjectURL(blob)
   const win  = window.open(url, '_blank')
-  if (win) { setTimeout(() => win.print(), 800) }
+  if (win) printWhenReady(win)
   setTimeout(() => URL.revokeObjectURL(url), 15000)
 }
 
@@ -1237,7 +1238,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
 
       {/* ── Book Tabs ── */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200 bg-white overflow-x-auto flex-shrink-0">
-        <div className="flex gap-1 flex-1 min-w-0">
+        <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto">
           {books.map(b => (
             <button key={b.id} type="button" onClick={() => loadBook(b.id)}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-colors whitespace-nowrap ${selectedBook === b.id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
