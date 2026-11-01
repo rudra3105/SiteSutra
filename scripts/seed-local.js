@@ -115,6 +115,14 @@ async function run() {
       id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')))`,
 
+    `CREATE TABLE IF NOT EXISTS cashbook_supervisors (
+      id TEXT PRIMARY KEY, cashbook_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')), UNIQUE (cashbook_id, user_id))`,
+
+    `CREATE TABLE IF NOT EXISTS custom_categories (
+      id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')))`,
+
     `CREATE TABLE IF NOT EXISTS custom_billing_options (
       id TEXT PRIMARY KEY, site_id TEXT NOT NULL, name TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')))`,
@@ -163,6 +171,7 @@ async function run() {
   // Add new columns (safe — ignores if already exists)
   const migrations = [
     'ALTER TABLE cashbook_entries ADD COLUMN added_by TEXT',
+    'ALTER TABLE cashbooks ADD COLUMN is_admin_book INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE cashbook_entries ADD COLUMN added_by_id TEXT',
     'ALTER TABLE site_locations ADD COLUMN excavation_status TEXT',
     'ALTER TABLE site_locations ADD COLUMN excavation_date TEXT',

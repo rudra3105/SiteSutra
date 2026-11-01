@@ -42,7 +42,7 @@ function SiteNavLink({
   )
 }
 
-const navItems = (siteId: string, isAdmin: boolean) => [
+const navItems = (siteId: string, isAdmin: boolean, showAccounting: boolean) => [
   {
     href: `/sites/${siteId}`,
     label: 'Overview',
@@ -79,7 +79,7 @@ const navItems = (siteId: string, isAdmin: boolean) => [
       </svg>
     ),
   },
-  ...(isAdmin
+  ...(showAccounting
     ? [
         {
           href: `/sites/${siteId}/accounting`,
@@ -90,6 +90,10 @@ const navItems = (siteId: string, isAdmin: boolean) => [
             </svg>
           ),
         },
+      ]
+    : []),
+  ...(isAdmin
+    ? [
         {
           href: `/sites/${siteId}/reports`,
           label: 'Reports',
@@ -107,14 +111,17 @@ export function SiteShell({
   children,
   site,
   session,
+  showAccounting = false,
 }: {
   children: React.ReactNode
   site: any
   session: any
+  // Admins, plus supervisors with at least one book shared with them on this site
+  showAccounting?: boolean
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const isAdmin = session?.role === 'ADMIN'
-  const items = navItems(site.id, isAdmin)
+  const items = navItems(site.id, isAdmin, showAccounting)
 
   return (
     <div className="flex flex-col h-screen h-dvh overflow-hidden">

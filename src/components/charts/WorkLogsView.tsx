@@ -871,14 +871,16 @@ function LocationsDataModal({
   const counted = locations.filter(l => !l.excludeFromTotal)
   const billedCols = STAGE_COLUMNS.filter(c => c.raField)
 
-  // Prints every location (same columns as the Locations table below, minus
-  // Remarks), with the span row between towers and the Total row.
+  // Prints every location exactly like the page's Locations listing (same towers,
+  // order and span rows, minus Remarks), plus the same Total row as the table below.
   function handlePrintLocations() {
     const win = window.open('', '_blank', 'width=1200,height=800')
     if (!win) return
     const th = (t: string) => `<th style="padding:5px 6px;text-align:center;">${escapeHtmlText(t)}</th>`
-    // Towers marked "Don't include in total" are left out of the printout entirely
-    const printable = counted
+    // ALL towers, including ones marked "Don't include in total towers" — the listing
+    // shows them too, and dropping them would shift every span row after them.
+    // The tower count in the header still excludes them (same as Progress Summary).
+    const printable = locations
     const rows = printable.map((loc, i) => {
       const next = printable[i + 1]
       const stageCells = STAGE_COLUMNS.map(col => {
@@ -932,7 +934,7 @@ function LocationsDataModal({
           <h1>JAYPAL ENTERPRISE</h1>
           <p class="site">${escapeHtmlText(siteName || 'Site')}</p>
         </div>
-        <p class="sub">Locations · ${printable.length} tower${printable.length === 1 ? '' : 's'} · Printed ${todayDDMMYYYY()}</p>
+        <p class="sub">Locations · ${counted.length} tower${counted.length === 1 ? '' : 's'} · Printed ${todayDDMMYYYY()}</p>
         <table>
           <thead><tr>${th('Sr No.')}${th('Loc No.')}${th('Tower type')}${th('Span')}${STAGE_COLUMNS.map(c => th(c.label)).join('')}</tr></thead>
           <tbody>${rows}

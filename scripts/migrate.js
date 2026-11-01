@@ -60,6 +60,15 @@ async function run() {
     id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     name TEXT NOT NULL, created_at TEXT DEFAULT now())`);
 
+  await client.query(`CREATE TABLE IF NOT EXISTS cashbook_supervisors (
+    id TEXT PRIMARY KEY, cashbook_id TEXT NOT NULL REFERENCES cashbooks(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT now(), UNIQUE (cashbook_id, user_id))`);
+
+  await client.query(`CREATE TABLE IF NOT EXISTS custom_categories (
+    id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, created_at TEXT DEFAULT now())`);
+
   await client.query(`CREATE TABLE IF NOT EXISTS custom_billing_options (
     id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     name TEXT NOT NULL, created_at TEXT DEFAULT now())`);
@@ -76,6 +85,7 @@ async function run() {
   await client.query(`ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS custom_field_values TEXT`);
   await client.query(`ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS updated_at TEXT`);
   await client.query(`ALTER TABLE cashbooks ADD COLUMN IF NOT EXISTS updated_at TEXT`);
+  await client.query(`ALTER TABLE cashbooks ADD COLUMN IF NOT EXISTS is_admin_book INTEGER NOT NULL DEFAULT 0`);
 
   // ── Parties become cashbook-specific (v7) ──────────────────
   await client.query(`ALTER TABLE parties ADD COLUMN IF NOT EXISTS cashbook_id TEXT REFERENCES cashbooks(id) ON DELETE CASCADE`);

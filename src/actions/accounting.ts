@@ -1,9 +1,10 @@
 'use server'
 // @ts-nocheck
 
-import { db, accounting, lpos, sites } from '@/lib/db'
+import { db, accounting, lpos, sites, cashbooks, cashbookEntries } from '@/lib/db'
+import { ensureAdminBook } from '@/actions/cashbook'
 import { requireSession, requireAdmin } from '@/lib/auth/session'
-import { eq, desc } from 'drizzle-orm'
+import { eq, desc, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
@@ -68,18 +69,27 @@ export async function getFinancialSummary(siteId: string) {
 }
 
 // Returns: { totalSites, activeSites, totalBudget, totalIncome, totalExpense, netAmount, siteSummaries[] }
+// Totals across sites come only from each site's Admin Book (Cash In = entry type 'OUT',
+// Cash Out = 'IN'), the same source as the site Overview's Net P&L.
 export async function getMasterDashboard() {
-  const session = await requireSession()
+  const session = await requireAdmin()
   if (!session) return null
-  const allSites      = await db.select().from(sites)
-  const allAccounting = await db.select().from(accounting)
-  const totalIncome   = allAccounting.filter((e: any) => e.type === 'INCOME').reduce((s: number, e: any) => s + e.amount, 0)
-  const totalExpense  = allAccounting.filter((e: any) => e.type === 'EXPENSE').reduce((s: number, e: any) => s + e.amount, 0)
-  const totalBudget   = allSites.reduce((s: number, site: any) => s + site.budget, 0)
+  const allSites = await db.select().from(sites)
+  for (const site of allSites) await ensureAdminBook(site.id)
+  const adminBooks = await db.select({ id: cashbooks.id, siteId: cashbooks.siteId }).from(cashbooks).where(eq(cashbooks.isAdminBook, 1))
+  const bookSite: Record<string, string> = Object.fromEntries(adminBooks.map((b: any) => [b.id, b.siteId]))
+  const entries = adminBooks.length
+    ? await db.select({ cashbookId: cashbookEntries.cashbookId, type: cashbookEntries.type, amount: cashbookEntries.amount })
+        .from(cashbookEntries).where(inArray(cashbookEntries.cashbookId, adminBooks.map((b: any) => b.id)))
+    : []
+  const sum = (list: any[], type: string) => list.filter((e: any) => e.type === type).reduce((s: number, e: any) => s + e.amount, 0)
+  const totalIncome  = sum(entries, 'OUT')
+  const totalExpense = sum(entries, 'IN')
+  const totalBudget  = allSites.reduce((s: number, site: any) => s + site.budget, 0)
   const siteSummaries = allSites.map((site: any) => {
-    const acc     = allAccounting.filter((a: any) => a.siteId === site.id)
-    const income  = acc.filter((e: any) => e.type === 'INCOME').reduce((s: number, e: any) => s + e.amount, 0)
-    const expense = acc.filter((e: any) => e.type === 'EXPENSE').reduce((s: number, e: any) => s + e.amount, 0)
+    const own     = entries.filter((e: any) => bookSite[e.cashbookId] === site.id)
+    const income  = sum(own, 'OUT')
+    const expense = sum(own, 'IN')
     return { ...site, income, expense, net: income - expense }
   })
   return { totalSites: allSites.length, activeSites: allSites.filter((s: any) => s.status === 'ACTIVE').length, totalBudget, totalIncome, totalExpense, netAmount: totalIncome - totalExpense, siteSummaries }
