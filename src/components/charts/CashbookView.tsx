@@ -6,10 +6,13 @@ import {
   addCashbookEntry, updateCashbookEntry, deleteCashbookEntry,
   getParties, createParty, updateParty, deleteParty,
   getCustomFields, createCustomField, updateCustomField, deleteCustomField,
+  addCustomFieldOption, renameCustomFieldOption, deleteCustomFieldOption,
   getCustomPaymentMethods, createCustomPaymentMethod, renameCustomPaymentMethod, deleteCustomPaymentMethod,
-  getCashbookAccessList, createCashbookAccess, deleteCashbookAccess,
-  getAllEntriesBySite, renameCategory, deleteCategory, getSiteCategories,
+  getCustomCategories, createCustomCategory, renameCustomCategory, deleteCustomCategory,
+  getBookSupervisors, setBookSupervisor,
+  getAllEntriesBySite, getSiteCategories,
 } from '@/actions/cashbook'
+import { ROBOTO_LINK, PRINT_FONT, printWhenReady } from '@/lib/print'
 
 // ── Constants ─────────────────────────────────────────────────
 const PARTY_TYPES        = ['Client', 'Supplier', 'Contractor', 'Labour Contractor', 'Transporter', 'Other']
@@ -29,6 +32,10 @@ export function fmtDate(dateStr: string) {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+export function entryCustomValues(e: any): Record<string, string> {
+  if (!e.customFieldValues) return {}
+  return typeof e.customFieldValues === 'string' ? JSON.parse(e.customFieldValues) : e.customFieldValues
 }
 export function partyLabel(name: string | null | undefined, parties: any[]): string {
   if (!name) return ''
@@ -87,65 +94,37 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   )
 }
 
-// ── Editable Dropdown (search + add new + edit/delete options) ─
-function EditableDropdown({
-  options, value, onChange, placeholder = 'Select...', onAddOption, onEditOption, onDeleteOption,
+// ── Option Dropdown (search + pick; "+ Add new..." opens the Options modal) ─
+// Values come only from the central lists managed in the Options modal — renaming
+// or deleting a value happens there, never inside the dropdown (same as Work Logs
+// statuses).
+type DropdownItem = { value: string; hint?: string | null; badge?: string | null }
+
+function OptionDropdown({
+  items, value, onChange, placeholder = 'Select...', searchPlaceholder = 'Search...', emptyText = 'No options found', onRequestAdd,
 }: {
-  options: string[]; value: string; onChange: (v: string) => void
-  placeholder?: string; onAddOption?: (v: string) => Promise<void>
-  onEditOption?: (oldVal: string, newVal: string) => Promise<void>
-  onDeleteOption?: (val: string) => Promise<void>
+  items: DropdownItem[]; value: string; onChange: (v: string) => void
+  placeholder?: string; searchPlaceholder?: string; emptyText?: string
+  onRequestAdd?: () => void
 }) {
-  const [open, setOpen]       = useState(false)
-  const [search, setSearch]   = useState('')
-  const [adding, setAdding]   = useState(false)
-  const [editingOpt, setEditingOpt] = useState<string | null>(null)
-  const [editValue, setEditValue]   = useState('')
-  const [busyOpt, setBusyOpt] = useState<string | null>(null)
+  const [open, setOpen]     = useState(false)
+  const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
-  const confirmDialog = useConfirm()
 
   useEffect(() => {
-    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setEditingOpt(null) } }
+    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
     document.addEventListener('mousedown', fn)
     return () => document.removeEventListener('mousedown', fn)
   }, [])
 
-  const filtered = options.filter(o => o.toLowerCase().includes(search.toLowerCase()))
-  const canAdd   = !!onAddOption && search.trim() && !options.some(o => o.toLowerCase() === search.trim().toLowerCase())
-
-  async function handleAdd() {
-    if (!onAddOption || !search.trim()) return
-    setAdding(true)
-    await onAddOption(search.trim())
-    onChange(search.trim())
-    setSearch(''); setOpen(false)
-    setAdding(false)
-  }
-
-  async function handleSaveEdit(oldVal: string) {
-    if (!onEditOption || !editValue.trim() || editValue.trim() === oldVal) { setEditingOpt(null); return }
-    setBusyOpt(oldVal)
-    await onEditOption(oldVal, editValue.trim())
-    if (value === oldVal) onChange(editValue.trim())
-    setBusyOpt(null); setEditingOpt(null)
-  }
-
-  async function handleDelete(o: string) {
-    if (!onDeleteOption) return
-    const ok = await confirmDialog(`Delete "${o}"? This will remove it from all existing entries.`, { confirmLabel: 'Delete' })
-    if (!ok) return
-    setBusyOpt(o)
-    await onDeleteOption(o)
-    if (value === o) onChange('')
-    setBusyOpt(null)
-  }
+  const filtered = items.filter(o => o.value.toLowerCase().includes(search.toLowerCase()))
+  const selectedHint = items.find(o => o.value === value)?.hint
 
   return (
     <div className="relative" ref={ref}>
       <button type="button" onClick={() => setOpen(o => !o)}
         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-left text-sm flex items-center justify-between bg-white hover:border-blue-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors min-h-[38px]">
-        <span className={value ? 'text-slate-900' : 'text-slate-400'}>{value || placeholder}</span>
+        <span className={value ? 'text-slate-900' : 'text-slate-400'}>{value ? `${value}${selectedHint ? ` (${selectedHint})` : ''}` : placeholder}</span>
         <svg className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
@@ -154,63 +133,29 @@ function EditableDropdown({
         <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-[100] overflow-hidden">
           <div className="p-2 border-b border-slate-100">
             <input autoFocus className="w-full text-sm px-3 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-slate-900 placeholder-slate-400"
-              placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && canAdd) handleAdd() }} />
+              placeholder={searchPlaceholder} value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.stopPropagation()} />
           </div>
           <div className="max-h-44 overflow-y-auto">
             {value && (
               <button type="button" onClick={() => { onChange(''); setOpen(false) }}
                 className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50 italic">— Clear</button>
             )}
-            {filtered.length === 0 && !canAdd && <p className="px-3 py-3 text-xs text-slate-400 text-center">No options found</p>}
-            {filtered.map(o => editingOpt === o ? (
-              <div key={o} className="flex items-center gap-1 px-2 py-1.5 bg-blue-50">
-                <input autoFocus className="flex-1 text-sm px-2 py-1 rounded border border-blue-300 bg-white text-slate-900 focus:outline-none"
-                  value={editValue} onChange={e => setEditValue(e.target.value)}
-                  onClick={e => e.stopPropagation()}
-                  onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleSaveEdit(o); if (e.key === 'Escape') setEditingOpt(null) }} />
-                <button type="button" disabled={busyOpt === o} onClick={e => { e.stopPropagation(); handleSaveEdit(o) }}
-                  className="text-xs px-2 py-1 rounded bg-blue-600 text-white font-semibold disabled:opacity-50">✓</button>
-                <button type="button" onClick={e => { e.stopPropagation(); setEditingOpt(null) }}
-                  className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-500">✕</button>
-              </div>
-            ) : (
-              <div key={o} className={`group flex items-center hover:bg-blue-50 transition-colors ${value === o ? 'bg-blue-50' : ''}`}>
-                <button type="button" onClick={() => { onChange(o); setOpen(false); setSearch('') }}
-                  className={`flex-1 text-left px-3 py-2 text-sm truncate ${value === o ? 'text-blue-700 font-semibold' : 'text-slate-900'}`}>
-                  {o}
-                </button>
-                {(onEditOption || onDeleteOption) && (
-                  <div className="flex items-center gap-0.5 pr-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {onEditOption && (
-                      <button type="button" title="Rename" disabled={busyOpt === o}
-                        onClick={e => { e.stopPropagation(); setEditingOpt(o); setEditValue(o) }}
-                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-100">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                      </button>
-                    )}
-                    {onDeleteOption && (
-                      <button type="button" title="Delete" disabled={busyOpt === o}
-                        onClick={e => { e.stopPropagation(); handleDelete(o) }}
-                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-100">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" /></svg>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+            {filtered.length === 0 && <p className="px-3 py-3 text-xs text-slate-400 text-center">{search ? `No match for "${search}"` : emptyText}</p>}
+            {filtered.map(o => (
+              <button key={o.value} type="button" onClick={() => { onChange(o.value); setOpen(false); setSearch('') }}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between min-w-0 hover:bg-blue-50 transition-colors ${value === o.value ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-900'}`}>
+                <span className="truncate">{o.value}{o.hint && <span className="text-slate-400 font-normal"> ({o.hint})</span>}</span>
+                {o.badge && <span className="text-slate-400 text-xs bg-slate-100 px-2 py-0.5 rounded flex-shrink-0 ml-1">{o.badge}</span>}
+              </button>
             ))}
           </div>
-          {onAddOption && (
+          {onRequestAdd && (
             <div className="border-t border-slate-200">
-              {canAdd ? (
-                <button type="button" onClick={handleAdd} disabled={adding}
-                  className="w-full px-3 py-2.5 text-left text-sm font-semibold text-blue-600 hover:bg-blue-50 flex items-center gap-2 transition-colors disabled:opacity-50">
-                  {adding ? '...' : `+ Add "${search.trim()}"`}
-                </button>
-              ) : (
-                <p className="px-3 py-2 text-xs text-slate-400 italic text-center">Type to add a new option</p>
-              )}
+              <button type="button" onClick={() => { setOpen(false); setSearch(''); onRequestAdd() }}
+                className="w-full px-3 py-2.5 text-left text-sm font-semibold text-blue-600 hover:bg-blue-50 flex items-center gap-2 transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
+                Add new...
+              </button>
             </div>
           )}
         </div>
@@ -219,165 +164,194 @@ function EditableDropdown({
   )
 }
 
-// ── Party Selector (same pattern, no nested form) ─────────────
-export function PartySelector({ parties, value, onChange, onPartyAdded, siteId, cashbookId, onEditParty, onDeleteParty }: {
-  parties: any[]; value: string; onChange: (v: string) => void
-  onPartyAdded: (p: any) => void; siteId: string; cashbookId: string
-  onEditParty?: (p: any) => Promise<void>; onDeleteParty?: (p: any) => Promise<void>
+// ── Party Selector (same dropdown, with phone + type shown) ───
+export function PartySelector({ parties, value, onChange, onRequestAdd }: {
+  parties: any[]; value: string; onChange: (v: string) => void; onRequestAdd?: () => void
 }) {
-  const [open, setOpen]         = useState(false)
-  const [search, setSearch]     = useState('')
-  const [showAdd, setShowAdd]   = useState(false)
-  const [newName, setNewName]   = useState('')
-  const [newType, setNewType]   = useState('')
-  const [newPhone, setNewPhone] = useState('')
-  const [adding, setAdding]     = useState(false)
-  const [err, setErr]           = useState('')
+  return (
+    <OptionDropdown items={parties.map(p => ({ value: p.name, hint: p.phone, badge: p.type }))}
+      value={value} onChange={onChange} onRequestAdd={onRequestAdd}
+      placeholder="Select party..." searchPlaceholder="Search party..." emptyText="No parties yet" />
+  )
+}
+
+// ── Options modal: one common place to add / rename / delete the values of
+//    every Accounting dropdown (Category, Party, Mode and custom dropdown fields).
+//    Opened from the toolbar with a Field picker, or from a dropdown's
+//    "+ Add new..." locked to that field — then the saved value is applied to it.
+export type OptionField = { key: string; label: string }
+export type ManagedOption = { id: string; name: string; type?: string | null; phone?: string | null }
+type OptionInput = { name: string; type?: string; phone?: string }
+
+export function OptionsModal({
+  fields, fieldKey, onFieldKeyChange, options, onClose, onAdd, onRename, onDelete, onApply,
+}: {
+  fields: OptionField[]
+  fieldKey: string
+  onFieldKeyChange?: (key: string) => void
+  options: ManagedOption[]
+  onClose: () => void
+  onAdd: (fieldKey: string, input: OptionInput) => Promise<{ name?: string; error?: string }>
+  onRename: (fieldKey: string, opt: ManagedOption, input: OptionInput) => Promise<string | void>
+  onDelete: (fieldKey: string, opt: ManagedOption) => Promise<string | void>
+  onApply?: (name: string) => void
+}) {
+  const [name, setName]           = useState('')
+  const [type, setType]           = useState('')
+  const [phone, setPhone]         = useState('')
+  const [saving, setSaving]       = useState(false)
+  const [error, setError]         = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName]   = useState('')
-  const [editType, setEditType]   = useState('')
-  const [editPhone, setEditPhone] = useState('')
+  const [edit, setEdit]           = useState<OptionInput>({ name: '' })
   const [busyId, setBusyId]       = useState<string | null>(null)
-  const ref = useRef<HTMLDivElement>(null)
   const confirmDialog = useConfirm()
 
-  useEffect(() => {
-    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setShowAdd(false); setEditingId(null) } }
-    document.addEventListener('mousedown', fn)
-    return () => document.removeEventListener('mousedown', fn)
-  }, [])
+  const fieldLabel = fields.find(f => f.key === fieldKey)?.label ?? fieldKey
+  const isParty = fieldKey === 'party'
 
-  const filtered = parties.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
-  const selectedPhone = parties.find(p => p.name === value)?.phone
+  useEffect(() => { setEditingId(null); setError('') }, [fieldKey])
 
-  async function doAdd() {
-    if (!newName.trim()) { setErr('Name required'); return }
-    setAdding(true); setErr('')
-    try {
-      const r = await createParty(cashbookId, siteId, newName.trim(), newType || undefined, newPhone || undefined)
-      if (!r) { setErr('No response'); setAdding(false); return }
-      if (r.error) { setErr(r.error); setAdding(false); return }
-      const p = { id: r.id, name: r.name ?? newName.trim(), type: newType, phone: newPhone }
-      onPartyAdded(p); onChange(p.name)
-      setNewName(''); setNewType(''); setNewPhone(''); setShowAdd(false); setOpen(false); setSearch('')
-    } catch (e: any) { setErr(e?.message ?? 'Error') }
-    setAdding(false)
+  async function handleSave(keepOpen: boolean) {
+    if (!name.trim()) { setError('Enter a name'); return }
+    setSaving(true); setError('')
+    const r = await onAdd(fieldKey, { name: name.trim(), type, phone })
+    setSaving(false)
+    if (r.error || !r.name) { setError(r.error ?? 'Could not add that value'); return }
+    onApply?.(r.name)
+    setName(''); setType(''); setPhone('')
+    if (!keepOpen) onClose()
   }
 
-  async function doSaveEdit(p: any) {
-    if (!onEditParty || !editName.trim()) { setEditingId(null); return }
-    setBusyId(p.id)
-    await onEditParty({ ...p, name: editName.trim(), type: editType, phone: editPhone })
-    if (value === p.name) onChange(editName.trim())
-    setBusyId(null); setEditingId(null)
-  }
-
-  async function doDelete(p: any) {
-    if (!onDeleteParty) return
-    const ok = await confirmDialog(`Delete party "${p.name}"? It will be removed from all existing entries.`, { confirmLabel: 'Delete' })
-    if (!ok) return
-    setBusyId(p.id)
-    await onDeleteParty(p)
-    if (value === p.name) onChange('')
+  async function handleRenameSave(o: ManagedOption) {
+    if (!edit.name.trim()) { setEditingId(null); return }
+    setBusyId(o.id); setError('')
+    const err = await onRename(fieldKey, o, { ...edit, name: edit.name.trim() })
     setBusyId(null)
+    if (err) { setError(err); return }
+    setEditingId(null)
   }
+
+  async function handleDelete(o: ManagedOption) {
+    const ok = await confirmDialog(`Delete "${o.name}"? It will be cleared from every entry using it.`, { confirmLabel: 'Delete' })
+    if (!ok) return
+    setBusyId(o.id); setError('')
+    const err = await onDelete(fieldKey, o)
+    setBusyId(null)
+    if (err) setError(err)
+  }
+
+  const inputCls = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400'
 
   return (
-    <div className="relative" ref={ref}>
-      <button type="button" onClick={() => setOpen(o => !o)}
-        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-left text-sm flex items-center justify-between bg-white hover:border-blue-400 focus:outline-none min-h-[38px]">
-        <span className={value ? 'text-slate-900' : 'text-slate-400'}>{value ? `${value}${selectedPhone ? ` (${selectedPhone})` : ''}` : 'Select party...'}</span>
-        <svg className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-[100] overflow-hidden">
-          <div className="p-2 border-b border-slate-100">
-            <input autoFocus className="w-full text-sm px-3 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-slate-900 placeholder-slate-400"
-              placeholder="Search party..." value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.stopPropagation()} />
-          </div>
-          <div className="max-h-44 overflow-y-auto">
-            {value && <button type="button" onClick={() => { onChange(''); setOpen(false) }} className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50 italic">— Clear</button>}
-            {filtered.length === 0 && !showAdd && <p className="px-3 py-3 text-xs text-slate-400 text-center">{search ? `No match for "${search}"` : 'No parties yet'}</p>}
-            {filtered.map(p => editingId === p.id ? (
-              <div key={p.id} className="p-2.5 space-y-1.5 bg-blue-50">
-                <input autoFocus className="w-full text-sm px-2 py-1.5 rounded border border-blue-300 bg-white text-slate-900 focus:outline-none"
-                  value={editName} onChange={e => setEditName(e.target.value)} onClick={e => e.stopPropagation()}
-                  onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') doSaveEdit(p); if (e.key === 'Escape') setEditingId(null) }} placeholder="Party name" />
-                <div className="grid grid-cols-2 gap-1.5">
-                  <select className="text-xs px-2 py-1.5 rounded border border-slate-300 bg-white text-slate-900" value={editType} onChange={e => setEditType(e.target.value)} onClick={e => e.stopPropagation()}>
-                    <option value="">Type</option>
-                    {PARTY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                  <input className="text-xs px-2 py-1.5 rounded border border-slate-300 bg-white text-slate-900" value={editPhone} onChange={e => setEditPhone(e.target.value)} onClick={e => e.stopPropagation()} placeholder="Phone" />
-                </div>
-                <div className="flex gap-1.5">
-                  <button type="button" onClick={e => { e.stopPropagation(); setEditingId(null) }} className="flex-1 text-xs py-1.5 rounded border border-slate-300 bg-white text-slate-700 font-semibold">Cancel</button>
-                  <button type="button" disabled={busyId === p.id} onClick={e => { e.stopPropagation(); doSaveEdit(p) }} className="flex-1 text-xs py-1.5 rounded bg-blue-600 text-white font-bold disabled:opacity-50">Save</button>
-                </div>
-              </div>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 sticky top-0 bg-white">
+          <h3 className="font-bold text-slate-900">Manage Options</h3>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {onFieldKeyChange ? (
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Field</label>
+              <select className={inputCls} value={fieldKey} onChange={e => onFieldKeyChange(e.target.value)}>
+                {fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Field: <span className="font-semibold text-slate-700">{fieldLabel}</span></p>
+          )}
+
+          <div>
+            <p className="text-xs font-semibold text-slate-500 mb-1.5">Values — {fieldLabel}</p>
+            {options.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">No values added for this field yet</p>
             ) : (
-              <div key={p.id} className={`group flex items-center hover:bg-blue-50 transition-colors ${value === p.name ? 'bg-blue-50' : ''}`}>
-                <button type="button" onClick={() => { onChange(p.name); setOpen(false); setSearch('') }}
-                  className="flex-1 text-left px-3 py-2.5 flex items-center justify-between min-w-0">
-                  <span className="text-slate-900 text-sm font-semibold truncate">{p.name}{p.phone && <span className="text-slate-400 font-normal"> ({p.phone})</span>}</span>
-                  {p.type && <span className="text-slate-400 text-xs bg-slate-100 px-2 py-0.5 rounded flex-shrink-0 ml-1">{p.type}</span>}
-                </button>
-                {(onEditParty || onDeleteParty) && (
-                  <div className="flex items-center gap-0.5 pr-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    {onEditParty && (
-                      <button type="button" title="Rename" disabled={busyId === p.id}
-                        onClick={e => { e.stopPropagation(); setEditingId(p.id); setEditName(p.name); setEditType(p.type ?? ''); setEditPhone(p.phone ?? '') }}
-                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-100">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                      </button>
-                    )}
-                    {onDeleteParty && (
-                      <button type="button" title="Delete" disabled={busyId === p.id}
-                        onClick={e => { e.stopPropagation(); doDelete(p) }}
-                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-100">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" /></svg>
-                      </button>
+              <div className="space-y-1.5">
+                {options.map(o => editingId === o.id ? (
+                  <div key={o.id} className="space-y-1.5 p-2 rounded-lg bg-blue-50 border border-blue-200">
+                    <div className="flex items-center gap-1.5">
+                      <input autoFocus className={`${inputCls} flex-1`} value={edit.name}
+                        onChange={e => setEdit(p => ({ ...p, name: e.target.value }))}
+                        onKeyDown={e => { if (e.key === 'Enter') handleRenameSave(o); if (e.key === 'Escape') setEditingId(null) }} />
+                      <button type="button" onClick={() => handleRenameSave(o)} disabled={busyId === o.id}
+                        className="text-xs px-2.5 py-2 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50">✓</button>
+                      <button type="button" onClick={() => setEditingId(null)}
+                        className="text-xs px-2.5 py-2 rounded-lg border border-slate-300 bg-white text-slate-500">✕</button>
+                    </div>
+                    {isParty && (
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <select className={inputCls} value={edit.type ?? ''} onChange={e => setEdit(p => ({ ...p, type: e.target.value }))}>
+                          <option value="">Type</option>
+                          {PARTY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <input className={inputCls} placeholder="Phone" value={edit.phone ?? ''} onChange={e => setEdit(p => ({ ...p, phone: e.target.value }))} />
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="border-t border-slate-200">
-            {!showAdd ? (
-              <button type="button" onClick={() => setShowAdd(true)}
-                className="w-full px-3 py-2.5 text-left text-sm font-semibold text-blue-600 hover:bg-blue-50 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
-                Add New Party
-              </button>
-            ) : (
-              <div className="p-3 space-y-2 bg-blue-50">
-                <p className="text-xs font-bold text-blue-800">Add New Party</p>
-                {err && <p className="text-red-600 text-xs">{err}</p>}
-                <input className="w-full text-sm px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  placeholder="Party name *" value={newName} onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); doAdd() } }} />
-                <div className="grid grid-cols-2 gap-2">
-                  <select className="text-sm px-2 py-2 rounded-lg border border-slate-300 bg-white text-slate-900" value={newType} onChange={e => setNewType(e.target.value)}>
-                    <option value="">Type (optional)</option>
-                    {PARTY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                  <input className="text-sm px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 placeholder-slate-400"
-                    placeholder="Phone" value={newPhone} onChange={e => setNewPhone(e.target.value)} onKeyDown={e => e.stopPropagation()} />
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => { setShowAdd(false); setNewName(''); setErr('') }} className="flex-1 text-xs py-2 rounded-lg border border-slate-300 bg-white text-slate-700 font-semibold">Cancel</button>
-                  <button type="button" onClick={doAdd} disabled={adding || !newName.trim()} className="flex-1 text-xs py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700 disabled:opacity-50">
-                    {adding ? 'Saving...' : 'Save'}
-                  </button>
-                </div>
+                ) : (
+                  <div key={o.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200">
+                    <span className="text-sm text-slate-800 min-w-0 truncate">
+                      {o.name}
+                      {isParty && o.phone && <span className="text-slate-400"> ({o.phone})</span>}
+                      {isParty && o.type && <span className="ml-2 text-slate-400 text-xs bg-slate-100 px-2 py-0.5 rounded">{o.type}</span>}
+                    </span>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button type="button" title="Rename" disabled={busyId === o.id}
+                        onClick={() => { setEditingId(o.id); setEdit({ name: o.name, type: o.type ?? '', phone: o.phone ?? '' }) }}
+                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button type="button" title="Delete" disabled={busyId === o.id}
+                        onClick={() => handleDelete(o)}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">Add New — {fieldLabel}</label>
+            <input className={inputCls} placeholder={isParty ? 'Party name *' : 'Name'} value={name}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleSave(false) }} />
+            {isParty && (
+              <div className="grid grid-cols-2 gap-2">
+                <select className={inputCls} value={type} onChange={e => setType(e.target.value)}>
+                  <option value="">Type (optional)</option>
+                  {PARTY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input className={inputCls} placeholder="Phone" value={phone} onChange={e => setPhone(e.target.value)} />
+              </div>
+            )}
+            {error && <p className="text-red-600 text-xs">{error}</p>}
+          </div>
         </div>
-      )}
+
+        <div className="flex gap-3 px-5 pb-5">
+          <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
+          <button type="button" onClick={() => handleSave(true)} disabled={saving}
+            className="flex-1 py-2.5 rounded-xl border-2 border-blue-400 text-blue-700 text-sm font-bold hover:bg-blue-50 disabled:opacity-60">
+            {saving ? 'Saving...' : 'Save & Add Another'}
+          </button>
+          <button type="button" onClick={() => handleSave(false)} disabled={saving}
+            className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:opacity-60">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -433,15 +407,14 @@ function ProofUpload({ value, onChange, onUploadingChange }: { value: string; on
 
 // ── Entry Drawer (Add/Edit) ───────────────────────────────────
 export function EntryDrawer({
-  open, onClose, siteId, cashbookId, initialData, entryType, customFields, allPaymentModes, allCategories, parties, onPartyAdded, onSave,
-  onAddPaymentMode, onAddCategory, onEditPaymentMode, onDeletePaymentMode, onEditCategory, onDeleteCategory, onEditParty, onDeleteParty,
+  open, onClose, initialData, entryType, customFields, allPaymentModes, allCategories, parties, onSave, onRequestAdd,
 }: {
-  open: boolean; onClose: () => void; siteId: string; cashbookId: string; initialData?: any; entryType: 'IN' | 'OUT'
+  open: boolean; onClose: () => void; initialData?: any; entryType: 'IN' | 'OUT'
   customFields: any[]; allPaymentModes: string[]; allCategories: string[]; parties: any[]
-  onPartyAdded: (p: any) => void; onSave: (data: any, addAnother?: boolean) => void; onAddPaymentMode?: (v: string) => Promise<void>; onAddCategory?: (v: string) => Promise<void>
-  onEditPaymentMode?: (oldV: string, newV: string) => Promise<void>; onDeletePaymentMode?: (v: string) => Promise<void>
-  onEditCategory?: (oldV: string, newV: string) => Promise<void>; onDeleteCategory?: (v: string) => Promise<void>
-  onEditParty?: (p: any) => Promise<void>; onDeleteParty?: (p: any) => Promise<void>
+  onSave: (data: any, addAnother?: boolean) => void
+  // Opens the common Options modal for `fieldKey`; `apply` puts the saved value into this form.
+  // Omitted for users who can't manage options — their dropdowns then have no "Add new".
+  onRequestAdd?: (fieldKey: string, apply: (name: string) => void) => void
 }) {
   const [partyName, setPartyName]     = useState(initialData?.partyName ?? '')
   const [proofUrl, setProofUrl]       = useState(initialData?.proofUrl ?? '')
@@ -516,7 +489,7 @@ export function EntryDrawer({
 
           {/* Amount */}
           <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Amount (₹) *</label>
+            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Amount *</label>
             <input name="amount" type="number" required min="0.01" step="0.01"
               className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="0.00" defaultValue={initialData?.amount ?? ''} />
@@ -533,8 +506,8 @@ export function EntryDrawer({
           {/* Party */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Party Name</label>
-            <PartySelector parties={parties} value={partyName} onChange={setPartyName} onPartyAdded={onPartyAdded} siteId={siteId} cashbookId={cashbookId}
-              onEditParty={onEditParty} onDeleteParty={onDeleteParty} />
+            <PartySelector parties={parties} value={partyName} onChange={setPartyName}
+              onRequestAdd={onRequestAdd && (() => onRequestAdd('party', setPartyName))} />
           </div>
 
           {/* Details / Description */}
@@ -547,15 +520,15 @@ export function EntryDrawer({
           {/* Category */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Category</label>
-            <EditableDropdown options={allCategories} value={category} onChange={setCategory} placeholder="Select or add category..."
-              onAddOption={onAddCategory} onEditOption={onEditCategory} onDeleteOption={onDeleteCategory} />
+            <OptionDropdown items={allCategories.map(v => ({ value: v }))} value={category} onChange={setCategory} placeholder="Select category..."
+              onRequestAdd={onRequestAdd && (() => onRequestAdd('category', setCategory))} />
           </div>
 
           {/* Payment Mode */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Mode</label>
-            <EditableDropdown options={allPaymentModes} value={paymentMode} onChange={setPaymentMode} placeholder="Select payment mode..."
-              onAddOption={onAddPaymentMode} onEditOption={onEditPaymentMode} onDeleteOption={onDeletePaymentMode} />
+            <OptionDropdown items={allPaymentModes.map(v => ({ value: v }))} value={paymentMode} onChange={setPaymentMode} placeholder="Select payment mode..."
+              onRequestAdd={onRequestAdd && (() => onRequestAdd('mode', setPaymentMode))} />
           </div>
 
           {/* Reference */}
@@ -580,7 +553,9 @@ export function EntryDrawer({
                       {cf.label}{cf.required ? ' *' : ''}
                     </label>
                     {cf.fieldType === 'DROPDOWN' ? (
-                      <EditableDropdown options={opts} value={customValues[cf.id] ?? ''} onChange={v => setCustomValues(prev => ({ ...prev, [cf.id]: v }))} placeholder={`Select ${cf.label}...`} />
+                      <OptionDropdown items={opts.map((v: string) => ({ value: v }))} value={customValues[cf.id] ?? ''}
+                        onChange={v => setCustomValues(prev => ({ ...prev, [cf.id]: v }))} placeholder={`Select ${cf.label}...`}
+                        onRequestAdd={onRequestAdd && (() => onRequestAdd(`cf:${cf.id}`, v => setCustomValues(prev => ({ ...prev, [cf.id]: v }))))} />
                     ) : cf.fieldType === 'DATE' ? (
                       <input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500" value={customValues[cf.id] ?? ''} onChange={e => setCustomValues(prev => ({ ...prev, [cf.id]: e.target.value }))} required={cf.required} />
                     ) : cf.fieldType === 'NUMBER' ? (
@@ -772,10 +747,10 @@ export function exportToPDF(entries: any[], bookName: string, summary: any, part
     </tr>`
   }).join('')
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bookName}</title>
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bookName}</title>${ROBOTO_LINK}
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;font-size:11px;color:#0f172a;padding:24px}
+  body{font-family:${PRINT_FONT};font-size:11px;color:#0f172a;padding:24px}
   .header{display:flex;align-items:center;gap:14px;background:#f8fafc;border-radius:10px;padding:14px 18px;margin-bottom:20px}
   .logo{width:42px;height:42px;object-fit:contain;border-radius:8px;flex-shrink:0;background:#fff}
   .title{font-size:17px;font-weight:700;color:#0f172a}
@@ -822,35 +797,101 @@ ${from && to ? `<div class="period">Report Period: ${from} to ${to}</div>` : ''}
   const blob = new Blob([html], { type: 'text/html' })
   const url  = URL.createObjectURL(blob)
   const win  = window.open(url, '_blank')
-  if (win) { setTimeout(() => win.print(), 800) }
+  if (win) printWhenReady(win)
   setTimeout(() => URL.revokeObjectURL(url), 15000)
+}
+
+// ── Entry details (body of the View popup) ────────────────────
+// `children` holds the action buttons — the admin view passes Edit/Delete,
+// the book-access view passes none (view only).
+export function EntryDetails({ entry, parties, customFields, onClose, children }: {
+  entry: any; parties: any[]; customFields: any[]; onClose: () => void; children?: React.ReactNode
+}) {
+  const vals = entryCustomValues(entry)
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className={`w-3 h-3 rounded-full ${entry.type === 'OUT' ? 'bg-green-500' : 'bg-red-500'}`} />
+          <h3 className="font-bold text-slate-900 text-lg">{entry.type === 'OUT' ? 'Cash In' : 'Cash Out'}</h3>
+        </div>
+        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl">✕</button>
+      </div>
+      <div className={`text-3xl font-bold ${entry.type === 'OUT' ? 'text-green-700' : 'text-red-600'}`}>
+        {entry.type === 'OUT' ? '' : '-'}{fmtAmt(entry.amount)}
+      </div>
+      {[
+        ['Date', fmtDate(entry.date)],
+        ['Details', entry.description],
+        ['Party', partyLabel(entry.partyName, parties)],
+        ['Category', entry.category],
+        ['Mode', entry.paymentMode],
+        ['Reference', entry.reference],
+        entry.lpoNumber && ['LPO Number', entry.lpoNumber],
+        entry.addedBy && ['Added By', entry.addedBy],
+        ...customFields.filter(cf => vals[cf.id]).map(cf => [cf.label, vals[cf.id]]),
+      ].filter(Boolean).map(([k, v]: any) => v ? (
+        <div key={k} className="flex justify-between py-2 border-b border-slate-100 last:border-0">
+          <span className="text-slate-500 text-sm">{k}</span>
+          <span className="text-slate-900 text-sm font-semibold text-right">{v}</span>
+        </div>
+      ) : null)}
+      {entry.proofUrl && (
+        <a href={entry.proofUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-700 text-sm font-semibold hover:underline pt-1">
+          📎 View Attached Bill / Proof
+        </a>
+      )}
+      {children}
+    </div>
+  )
 }
 
 // ── Main CashbookView ─────────────────────────────────────────
 export function CashbookView(props: {
   siteId: string; siteName?: string; initialBooks: any[]; initialParties: any[]; initialCustomPaymentMethods: any[]
+  canManage?: boolean
 }) {
   return <ConfirmProvider><CashbookViewInner {...props} /></ConfirmProvider>
 }
 
-function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties, initialCustomPaymentMethods }: {
+// `canManage` is true for admins. Supervisors get false: they only see the books
+// shared with them and can view entries and add new ones — no book/entry edits,
+// settings, options, access or cross-book report.
+function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties, initialCustomPaymentMethods, canManage = true }: {
   siteId: string; siteName?: string; initialBooks: any[]; initialParties: any[]; initialCustomPaymentMethods: any[]
+  canManage?: boolean
 }) {
   const [books, setBooks]                 = useState(initialBooks)
   const [parties, setParties]             = useState(initialParties)
   const [siteParties, setSiteParties]     = useState<any[]>(initialParties)
   const [siteCategories, setSiteCategories] = useState<string[]>([])
   const [customPMs, setCustomPMs]         = useState<{ id: string; name: string }[]>(initialCustomPaymentMethods)
-  const [customCats, setCustomCats]       = useState<string[]>([])
+  const [customCats, setCustomCats]       = useState<{ id: string; name: string }[]>([])
   const [selectedBook, setSelectedBook]   = useState<string | null>(initialBooks[0]?.id ?? null)
   const [entries, setEntries]             = useState<any[]>([])
   const [customFields, setCustomFields]   = useState<any[]>([])
-  const [accessList, setAccessList]       = useState<any[]>([])
+  type BookUser = { id: string; name: string; email: string; hasSiteAccess?: boolean }
+  const [bookUsers, setBookUsers]         = useState<{ granted: BookUser[]; available: BookUser[] }>({ granted: [], available: [] })
+  const [grantUserId, setGrantUserId]     = useState('')
   const [page, setPage]                   = useState(1)
   const [selected, setSelected]           = useState<Set<string>>(new Set())
   const [loading, setLoading]             = useState(false)
   const [ok, setOk]                       = useState('')
   const initialLoadRef = useRef(false)
+  // Scrolling the entries table down hides the totals bar, filters and toolbar above it
+  // (more room for the list); scrolling back up shows them again.
+  const [headerHidden, setHeaderHidden] = useState(false)
+  const lastScrollTop = useRef(0)
+  const scrollLockUntil = useRef(0)
+  function handleListScroll(e: React.UIEvent<HTMLDivElement>) {
+    const top = e.currentTarget.scrollTop
+    const delta = top - lastScrollTop.current
+    lastScrollTop.current = top
+    // While the header animates the table resizes and the browser nudges scrollTop — ignore that
+    if (Date.now() < scrollLockUntil.current) return
+    const next = top < 10 ? false : delta > 6 ? true : delta < -6 ? false : headerHidden
+    if (next !== headerHidden) { setHeaderHidden(next); scrollLockUntil.current = Date.now() + 300 }
+  }
   const confirmDialog = useConfirm()
 
   // Modals/drawers
@@ -859,6 +900,9 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
   const [viewEntry, setViewEntry] = useState<any>(null)
   const [editingBook, setEditingBook] = useState<any>(null)
   const [error, setError]       = useState('')
+  // Common Options modal — `locked` when opened from a dropdown's "Add new", whose
+  // `apply` then puts the saved value into the open entry form.
+  const [optModal, setOptModal] = useState<{ fieldKey: string; locked: boolean; apply?: (name: string) => void } | null>(null)
 
   // Custom field config state
   const [cfLabel, setCfLabel]   = useState('')
@@ -875,6 +919,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
   const [filterCategory, setFilterCategory] = useState('')
   const [filterMode, setFilterMode]         = useState('')
   const [filterAddedBy, setFilterAddedBy]   = useState('')
+  const [filterCustom, setFilterCustom]     = useState<Record<string, string>>({}) // custom field id → value
   const [filterFrom, setFilterFrom]         = useState('')
   const [filterTo, setFilterTo]             = useState('')
   const [showMoreFilters, setShowMoreFilters] = useState(false)
@@ -888,13 +933,21 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
   const [crossDateTo, setCrossDateTo]     = useState('')
   const [crossLoading, setCrossLoading]   = useState(false)
 
-  const allPaymentModes = [...new Set([...customPMs.map(m => m.name), ...entries.map((e: any) => e.paymentMode).filter(Boolean)])]
-  const allCategories   = [...new Set([...customCats, ...entries.map((e: any) => e.category).filter(Boolean)])]
+  // Dropdown values come only from the central lists (managed in the Options modal)
+  const allPaymentModes = customPMs.map(m => m.name)
+  const allCategories   = customCats.map(c => c.name)
+
+  const optionFields: OptionField[] = [
+    { key: 'category', label: 'Category' },
+    { key: 'party',    label: 'Party' },
+    { key: 'mode',     label: 'Mode' },
+    ...customFields.filter(cf => cf.fieldType === 'DROPDOWN').map(cf => ({ key: `cf:${cf.id}`, label: cf.label })),
+  ]
 
   function flash(msg: string) { setOk(msg); setTimeout(() => setOk(''), 3000) }
 
   async function loadBook(bookId: string) {
-    setSelectedBook(bookId); setEntries([]); setPage(1); setSelected(new Set()); setParties([])
+    setSelectedBook(bookId); setEntries([]); setPage(1); setSelected(new Set()); setParties([]); setFilterCustom({}); setHeaderHidden(false)
     const [entriesRes, fields, bookParties] = await Promise.all([
       fetch(`/api/cashbook/${bookId}/entries`).then(r => r.json()),
       getCustomFields(bookId),
@@ -916,6 +969,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
     fetch(`/api/parties?siteId=${siteId}`).then(r => r.json())
       .then(d => { if (Array.isArray(d)) setSiteParties(d) }).catch(() => {})
     getSiteCategories(siteId).then(c => { if (Array.isArray(c)) setSiteCategories(c as string[]) }).catch(() => {})
+    getCustomCategories(siteId).then(c => { if (Array.isArray(c)) setCustomCats(c) }).catch(() => {})
   }, [siteId])
 
   // ── Book CRUD ────────────────────────────────────────────────
@@ -994,74 +1048,103 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
     flash('Field deleted')
   }
 
-  // ── Payment mode + category add/edit/delete ────────────────────
-  async function handleAddPaymentMode(name: string) {
-    const r = await createCustomPaymentMethod(siteId, name)
-    if (r?.success) setCustomPMs(prev => [...prev, { id: r.id, name: r.name ?? name }])
+  // ── Common Options modal: values of Category / Party / Mode / custom dropdowns ──
+  function optionsFor(fieldKey: string): ManagedOption[] {
+    if (fieldKey === 'category') return customCats
+    if (fieldKey === 'mode')     return customPMs
+    if (fieldKey === 'party')    return parties
+    const cf = customFields.find(f => `cf:${f.id}` === fieldKey)
+    return (cf?.options ? JSON.parse(cf.options) : []).map((name: string) => ({ id: name, name }))
   }
-  async function handleEditPaymentMode(oldName: string, newName: string) {
-    const pm = customPMs.find(m => m.name === oldName)
-    if (!pm) return
-    const r = await renameCustomPaymentMethod(pm.id, newName, siteId)
-    if (r?.success) {
-      setCustomPMs(prev => prev.map(m => m.id === pm.id ? { ...m, name: newName } : m))
-      setEntries(prev => prev.map(e => e.paymentMode === oldName ? { ...e, paymentMode: newName } : e))
+
+  function setFieldOptions(fieldId: string, update: (opts: string[]) => string[]) {
+    setCustomFields(prev => prev.map(f => f.id === fieldId
+      ? { ...f, options: JSON.stringify(update(f.options ? JSON.parse(f.options) : [])) } : f))
+  }
+
+  // Applies a rename (to = new name) or delete (to = null) to the entries loaded on screen
+  function replaceEntryValue(fieldKey: string, from: string, to: string | null) {
+    const col = fieldKey === 'category' ? 'category' : fieldKey === 'mode' ? 'paymentMode' : fieldKey === 'party' ? 'partyName' : null
+    setEntries(prev => prev.map(e => {
+      if (col) return e[col] === from ? { ...e, [col]: to } : e
+      const fieldId = fieldKey.slice(3)
+      const vals = e.customFieldValues ? (typeof e.customFieldValues === 'string' ? JSON.parse(e.customFieldValues) : { ...e.customFieldValues }) : null
+      if (!vals || vals[fieldId] !== from) return e
+      if (to === null) delete vals[fieldId]; else vals[fieldId] = to
+      return { ...e, customFieldValues: vals }
+    }))
+  }
+
+  async function handleOptionAdd(fieldKey: string, input: { name: string; type?: string; phone?: string }) {
+    if (fieldKey === 'category') {
+      const r: any = await createCustomCategory(siteId, input.name)
+      if (r?.error) return { error: r.error }
+      setCustomCats(prev => prev.some(c => c.id === r.id) ? prev : [...prev, { id: r.id, name: r.name }])
+      return { name: r.name }
     }
-  }
-  async function handleDeletePaymentMode(name: string) {
-    const pm = customPMs.find(m => m.name === name)
-    if (!pm) return
-    const r = await deleteCustomPaymentMethod(pm.id, siteId)
-    if (r?.success) {
-      setCustomPMs(prev => prev.filter(m => m.id !== pm.id))
-      setEntries(prev => prev.map(e => e.paymentMode === name ? { ...e, paymentMode: null } : e))
+    if (fieldKey === 'mode') {
+      const r: any = await createCustomPaymentMethod(siteId, input.name)
+      if (r?.error) return { error: r.error }
+      setCustomPMs(prev => prev.some(m => m.id === r.id) ? prev : [...prev, { id: r.id, name: r.name }])
+      return { name: r.name }
     }
-  }
-  async function handleAddCategory(name: string) {
-    setCustomCats(prev => [...prev, name])
-    // Categories are saved per-entry, no separate table needed
-  }
-  async function handleEditCategory(oldName: string, newName: string) {
-    if (!selectedBook) return
-    const r = await renameCategory(selectedBook, oldName, newName, siteId)
-    if (r?.success) {
-      setCustomCats(prev => prev.map(c => c === oldName ? newName : c))
-      setEntries(prev => prev.map(e => e.category === oldName ? { ...e, category: newName } : e))
+    if (fieldKey === 'party') {
+      if (!selectedBook) return { error: 'Select a book first' }
+      const r: any = await createParty(selectedBook, siteId, input.name, input.type || undefined, input.phone || undefined)
+      if (r?.error) return { error: r.error }
+      setParties(prev => [...prev, { id: r.id, name: r.name, type: input.type || null, phone: input.phone || null }])
+      return { name: r.name }
     }
+    const fieldId = fieldKey.slice(3)
+    const r: any = await addCustomFieldOption(fieldId, input.name, siteId)
+    if (r?.error) return { error: r.error }
+    setFieldOptions(fieldId, opts => opts.includes(r.name) ? opts : [...opts, r.name])
+    return { name: r.name }
   }
-  async function handleDeleteCategory(name: string) {
-    if (!selectedBook) return
-    const r = await deleteCategory(selectedBook, name, siteId)
-    if (r?.success) {
-      setCustomCats(prev => prev.filter(c => c !== name))
-      setEntries(prev => prev.map(e => e.category === name ? { ...e, category: null } : e))
-    }
+
+  async function handleOptionRename(fieldKey: string, opt: ManagedOption, input: { name: string; type?: string; phone?: string }) {
+    let r: any
+    if (fieldKey === 'category') r = await renameCustomCategory(opt.id, input.name, siteId)
+    else if (fieldKey === 'mode') r = await renameCustomPaymentMethod(opt.id, input.name, siteId)
+    else if (fieldKey === 'party') r = await updateParty(opt.id, input.name, input.type ?? '', input.phone ?? '', siteId)
+    else r = await renameCustomFieldOption(fieldKey.slice(3), opt.name, input.name, siteId)
+    if (r?.error) return r.error as string
+    if (fieldKey === 'category') setCustomCats(prev => prev.map(c => c.id === opt.id ? { ...c, name: input.name } : c))
+    else if (fieldKey === 'mode') setCustomPMs(prev => prev.map(m => m.id === opt.id ? { ...m, name: input.name } : m))
+    else if (fieldKey === 'party') setParties(prev => prev.map(p => p.id === opt.id ? { ...p, name: input.name, type: input.type || null, phone: input.phone || null } : p))
+    else setFieldOptions(fieldKey.slice(3), opts => opts.map(o => o === opt.name ? input.name : o))
+    if (opt.name !== input.name) replaceEntryValue(fieldKey, opt.name, input.name)
   }
-  async function handleEditParty(p: any) {
-    const r = await updateParty(p.id, p.name, p.type, p.phone, siteId)
-    if (r?.success) {
-      const old = parties.find(x => x.id === p.id)
-      setParties(prev => prev.map(x => x.id === p.id ? { ...x, name: p.name, type: p.type || null, phone: p.phone || null } : x))
-      if (old && old.name !== p.name) setEntries(prev => prev.map(e => e.partyName === old.name ? { ...e, partyName: p.name } : e))
-    }
-  }
-  async function handleDeleteParty(p: any) {
-    const r = await deleteParty(p.id, siteId)
-    if (r?.success) {
-      setParties(prev => prev.filter(x => x.id !== p.id))
-      setEntries(prev => prev.map(e => e.partyName === p.name ? { ...e, partyName: null } : e))
-    }
+
+  async function handleOptionDelete(fieldKey: string, opt: ManagedOption) {
+    let r: any
+    if (fieldKey === 'category') r = await deleteCustomCategory(opt.id, siteId)
+    else if (fieldKey === 'mode') r = await deleteCustomPaymentMethod(opt.id, siteId)
+    else if (fieldKey === 'party') r = await deleteParty(opt.id, siteId)
+    else r = await deleteCustomFieldOption(fieldKey.slice(3), opt.name, siteId)
+    if (r?.error) return r.error as string
+    if (fieldKey === 'category') setCustomCats(prev => prev.filter(c => c.id !== opt.id))
+    else if (fieldKey === 'mode') setCustomPMs(prev => prev.filter(m => m.id !== opt.id))
+    else if (fieldKey === 'party') setParties(prev => prev.filter(p => p.id !== opt.id))
+    else setFieldOptions(fieldKey.slice(3), opts => opts.filter(o => o !== opt.name))
+    replaceEntryValue(fieldKey, opt.name, null)
   }
 
   // ── Access ────────────────────────────────────────────────────
-  async function loadAccess() { if (selectedBook) { const l = await getCashbookAccessList(selectedBook); setAccessList(l ?? []) } }
-  async function handleAddAccess(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault(); setLoading(true); setError('')
-    const fd = new FormData(e.currentTarget)
-    const r = await createCashbookAccess(selectedBook!, fd.get('email') as string, fd.get('name') as string, fd.get('password') as string, siteId)
+  async function loadAccess() {
+    if (!selectedBook) return
+    const users = await getBookSupervisors(selectedBook)
+    setBookUsers(users ?? { granted: [], available: [] }); setGrantUserId('')
+  }
+  // Grant (picked user) or revoke this book for a supervisor, then refresh both lists
+  async function changeBookUser(userId: string, granted: boolean) {
+    if (!selectedBook || !userId) return
+    setLoading(true); setError('')
+    const r = await setBookSupervisor(selectedBook, userId, granted, siteId)
     setLoading(false)
     if (r?.error) { setError(r.error); return }
-    flash('Access created!'); await loadAccess(); (e.target as HTMLFormElement).reset()
+    flash(granted ? 'Access granted' : 'Access revoked')
+    loadAccess()
   }
 
   // ── Filtered + paginated ──────────────────────────────────────
@@ -1074,8 +1157,11 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
     if (filterAddedBy && e.addedBy !== filterAddedBy) return false
     if (filterFrom && e.date < filterFrom) return false
     if (filterTo && e.date > filterTo) return false
+    for (const [fieldId, v] of Object.entries(filterCustom)) {
+      if (v && entryCustomValues(e)[fieldId] !== v) return false
+    }
     return true
-  }), [entries, filterSearch, filterType, filterParty, filterCategory, filterMode, filterAddedBy, filterFrom, filterTo])
+  }), [entries, filterSearch, filterType, filterParty, filterCategory, filterMode, filterAddedBy, filterFrom, filterTo, filterCustom])
 
 
   // ── Cross-book report ──────────────────────────────────────
@@ -1116,7 +1202,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-  const hasFilters = filterSearch || filterType || filterParty || filterCategory || filterMode || filterAddedBy || filterFrom || filterTo
+  const hasFilters = filterSearch || filterType || filterParty || filterCategory || filterMode || filterAddedBy || filterFrom || filterTo || Object.values(filterCustom).some(Boolean)
 
   // Running balance (computed from ALL entries, not just page)
   const balanceMap = useMemo(() => {
@@ -1138,6 +1224,13 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
   const uniqueCategories = [...new Set(entries.map(e => e.category).filter(Boolean))]
   const uniqueModes      = [...new Set(entries.map(e => e.paymentMode).filter(Boolean))]
   const uniqueAddedBy    = [...new Set(entries.map(e => e.addedBy).filter(Boolean))]
+  // One filter per custom field: a dropdown field lists all its options (plus any
+  // older value still on entries); other field types list the values entered so far.
+  const customFilterValues = (cf: any): string[] => {
+    const used = entries.map(e => entryCustomValues(e)[cf.id]).filter(Boolean)
+    const opts = cf.fieldType === 'DROPDOWN' && cf.options ? JSON.parse(cf.options) : []
+    return [...new Set<string>([...opts, ...used])]
+  }
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -1145,24 +1238,31 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
 
       {/* ── Book Tabs ── */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200 bg-white overflow-x-auto flex-shrink-0">
-        <div className="flex gap-1 flex-1 min-w-0">
+        <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto">
           {books.map(b => (
             <button key={b.id} type="button" onClick={() => loadBook(b.id)}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-colors whitespace-nowrap ${selectedBook === b.id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
               📒 {b.name}
+              {!!b.isAdminBook && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${selectedBook === b.id ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-700'}`} title="Admin-only book — the site's Net P&L is calculated from it">ADMIN</span>}
             </button>
           ))}
-          <button type="button" onClick={() => { setEditingBook(null); setError(''); setModal('book') }}
-            className="flex items-center gap-1 px-3 py-2 rounded-full text-sm font-semibold border-2 border-dashed border-slate-300 text-slate-500 hover:border-blue-400 hover:text-blue-600 whitespace-nowrap">
-            + New
-          </button>
+          {canManage && (
+            <button type="button" onClick={() => { setEditingBook(null); setError(''); setModal('book') }}
+              className="flex items-center gap-1 px-3 py-2 rounded-full text-sm font-semibold border-2 border-dashed border-slate-300 text-slate-500 hover:border-blue-400 hover:text-blue-600 whitespace-nowrap">
+              + New
+            </button>
+          )}
         </div>
 
-        {selectedBook && (
+        {selectedBook && canManage && (
           <div className="flex gap-2 flex-shrink-0">
             <button type="button" onClick={() => { setEditingBook(currentBook); setError(''); setModal('book') }}
               className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-300 transition-colors" title="Edit book">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+            </button>
+            <button type="button" onClick={() => setOptModal({ fieldKey: 'category', locked: false })}
+              className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-300 transition-colors" title="Dropdown Options (Category, Party, Mode...)">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
             </button>
             <button type="button" onClick={() => setModal('settings')} className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-300 transition-colors" title="Settings">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
@@ -1180,19 +1280,22 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
           <div className="text-5xl mb-4">📒</div>
           <p className="text-slate-700 font-bold text-lg mb-2">No cashbooks yet</p>
           <p className="text-slate-500 text-sm mb-6">Create your first cashbook to track transactions</p>
-          <button type="button" onClick={() => { setEditingBook(null); setModal('book') }} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors">Create Cashbook</button>
+          {canManage && <button type="button" onClick={() => { setEditingBook(null); setModal('book') }} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors">Create Cashbook</button>}
         </div>
       )}
 
       {selectedBook && (
         <>
+          {/* Totals, filters and toolbar collapse while scrolling down the table (see handleListScroll) */}
+          <div className={`grid flex-shrink-0 transition-[grid-template-rows] duration-200 ease-out ${headerHidden ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'}`}>
+          <div className="min-h-0 overflow-hidden">
           {/* ── Summary bar ── */}
           <div className="flex items-center gap-4 px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex-shrink-0 text-sm">
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500" /><span className="text-slate-600">Cash In:</span><span className="font-bold text-green-700">₹{fmtAmt(income)}</span></div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500" /><span className="text-slate-600">Cash In:</span><span className="font-bold text-green-700">{fmtAmt(income)}</span></div>
             <div className="text-slate-300">|</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-slate-600">Cash Out:</span><span className="font-bold text-red-600">₹{fmtAmt(expense)}</span></div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-slate-600">Cash Out:</span><span className="font-bold text-red-600">{fmtAmt(expense)}</span></div>
             <div className="text-slate-300">|</div>
-            <div className="flex items-center gap-1.5"><span className="text-slate-600">Balance:</span><span className={`font-bold ${net >= 0 ? 'text-green-700' : 'text-red-600'}`}>₹{fmtAmt(Math.abs(net))}</span></div>
+            <div className="flex items-center gap-1.5"><span className="text-slate-600">Balance:</span><span className={`font-bold ${net >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtAmt(Math.abs(net))}</span></div>
             <div className="ml-auto flex gap-2">
               {hasFilters && <span className="text-xs text-slate-400 italic">Filtered</span>}
               <button type="button" onClick={() => exportToExcel(filtered, currentBook?.name ?? 'Cashbook', parties, siteName)}
@@ -1203,10 +1306,12 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 text-xs font-semibold transition-colors">
                 ↓ PDF
               </button>
-              <button type="button" onClick={() => { openCrossModal() }}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 text-xs font-semibold transition-colors">
-                📊 All Books
-              </button>
+              {canManage && (
+                <button type="button" onClick={() => { openCrossModal() }}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 text-xs font-semibold transition-colors">
+                  📊 All Books
+                </button>
+              )}
             </div>
           </div>
 
@@ -1241,6 +1346,13 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                     <option value="">All Added By</option>
                     {uniqueAddedBy.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
+                  {customFields.map(cf => (
+                    <select key={cf.id} className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      value={filterCustom[cf.id] ?? ''} onChange={e => setFilterCustom(prev => ({ ...prev, [cf.id]: e.target.value }))}>
+                      <option value="">All {cf.label}</option>
+                      {customFilterValues(cf).map(v => <option key={v} value={v}>{cf.fieldType === 'DATE' ? fmtDate(v) : v}</option>)}
+                    </select>
+                  ))}
                   <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} title="From" />
                   <input type="date" className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none" value={filterTo} onChange={e => setFilterTo(e.target.value)} title="To" />
                 </>
@@ -1248,7 +1360,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
               <button type="button" onClick={() => setShowMoreFilters(s => !s)} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap px-2 py-2">
                 {showMoreFilters ? 'Show less' : 'Show more'}
               </button>
-              {hasFilters && <button type="button" onClick={() => { setFilterSearch(''); setFilterType(''); setFilterParty(''); setFilterCategory(''); setFilterMode(''); setFilterAddedBy(''); setFilterFrom(''); setFilterTo('') }} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap">Clear</button>}
+              {hasFilters && <button type="button" onClick={() => { setFilterSearch(''); setFilterType(''); setFilterParty(''); setFilterCategory(''); setFilterMode(''); setFilterAddedBy(''); setFilterFrom(''); setFilterTo(''); setFilterCustom({}) }} className="text-xs text-blue-600 hover:underline font-semibold whitespace-nowrap">Clear</button>}
             </div>
           </div>
 
@@ -1275,19 +1387,24 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
             </div>
           </div>
 
+          </div>
+          </div>
+
           {/* ── Table ── */}
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto" onScroll={handleListScroll}>
             <table className="w-full border-collapse text-sm" style={{ minWidth: 700 }}>
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 sticky top-0">
-                  <th className="w-10 px-3 py-3">
-                    <input type="checkbox" className="accent-blue-600"
-                      checked={paginated.length > 0 && paginated.every(e => selected.has(e.id))}
-                      onChange={ev => {
-                        if (ev.target.checked) setSelected(prev => new Set([...prev, ...paginated.map(e => e.id)]))
-                        else setSelected(prev => { const n = new Set(prev); paginated.forEach(e => n.delete(e.id)); return n })
-                      }} />
-                  </th>
+                  {canManage && (
+                    <th className="w-10 px-3 py-3">
+                      <input type="checkbox" className="accent-blue-600"
+                        checked={paginated.length > 0 && paginated.every(e => selected.has(e.id))}
+                        onChange={ev => {
+                          if (ev.target.checked) setSelected(prev => new Set([...prev, ...paginated.map(e => e.id)]))
+                          else setSelected(prev => { const n = new Set(prev); paginated.forEach(e => n.delete(e.id)); return n })
+                        }} />
+                    </th>
+                  )}
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Date</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Details</th>
                   <th className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>
@@ -1295,22 +1412,24 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                   <th className="px-3 py-3 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Bill</th>
                   <th className="px-3 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Amount</th>
                   <th className="px-3 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Balance</th>
-                  <th className="w-20 px-3 py-3" />
+                  <th className="w-12 px-3 py-3" />
                 </tr>
               </thead>
               <tbody>
                 {paginated.length === 0 ? (
-                  <tr><td colSpan={9} className="px-4 py-16 text-center text-slate-400 text-sm">{hasFilters ? 'No entries match your filters.' : 'No entries yet. Click "Add Entry" to get started.'}</td></tr>
+                  <tr><td colSpan={canManage ? 9 : 8} className="px-4 py-16 text-center text-slate-400 text-sm">{hasFilters ? 'No entries match your filters.' : 'No entries yet. Click "Add Entry" to get started.'}</td></tr>
                 ) : paginated.map((e: any) => {
                   const isReceived = e.type === 'OUT'
                   const bal = balanceMap[e.id] ?? 0
                   const isPdf = e.proofUrl?.includes('pdf')
                   return (
                     <tr key={e.id} className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${selected.has(e.id) ? 'bg-blue-50' : ''}`}>
-                      <td className="px-3 py-3">
-                        <input type="checkbox" className="accent-blue-600" checked={selected.has(e.id)}
-                          onChange={ev => setSelected(prev => { const n = new Set(prev); ev.target.checked ? n.add(e.id) : n.delete(e.id); return n })} />
-                      </td>
+                      {canManage && (
+                        <td className="px-3 py-3">
+                          <input type="checkbox" className="accent-blue-600" checked={selected.has(e.id)}
+                            onChange={ev => setSelected(prev => { const n = new Set(prev); ev.target.checked ? n.add(e.id) : n.delete(e.id); return n })} />
+                        </td>
+                      )}
                       <td className="px-3 py-3">
                         <div className="text-xs text-slate-700 leading-relaxed">{fmtDate(e.date)}</div>
                       </td>
@@ -1334,30 +1453,17 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                       </td>
                       <td className="px-3 py-3 text-right">
                         <span className={`font-bold text-sm ${isReceived ? 'text-green-700' : 'text-red-600'}`}>
-                          {isReceived ? '' : '-'}₹{fmtAmt(e.amount)}
+                          {isReceived ? '' : '-'}{fmtAmt(e.amount)}
                         </span>
                       </td>
                       <td className="px-3 py-3 text-right">
-                        <span className={`font-semibold text-sm ${bal >= 0 ? 'text-green-700' : 'text-red-600'}`}>₹{fmtAmt(bal)}</span>
+                        <span className={`font-semibold text-sm ${bal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtAmt(bal)}</span>
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-1 justify-end">
                           <button type="button" onClick={() => { setViewEntry(e); setModal('view') }}
                             className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors" title="View">
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                          </button>
-                          <button type="button" onClick={() => setDrawer({ open: true, entry: e })}
-                            className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-600 transition-colors" title="Edit">
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                          </button>
-                          <button type="button"
-                            onClick={() => setDrawer({ open: true, entry: { ...e, id: undefined } })}
-                            className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Duplicate">
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                          </button>
-                          <button type="button" onClick={() => handleDeleteEntry(e.id)}
-                            className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors" title="Delete">
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                           </button>
                         </div>
                       </td>
@@ -1473,25 +1579,30 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
       <EntryDrawer
         open={drawer.open}
         onClose={() => { setDrawer({ open: false }); setError('') }}
-        siteId={siteId}
-        cashbookId={selectedBook ?? ''}
         initialData={drawer.entry}
         entryType={drawer.entry?.type ?? drawer.type ?? 'OUT'}
         customFields={customFields}
         allPaymentModes={allPaymentModes}
         allCategories={allCategories}
         parties={parties}
-        onPartyAdded={p => setParties(prev => [...prev, p])}
         onSave={handleSaveEntry}
-        onAddPaymentMode={handleAddPaymentMode}
-        onAddCategory={handleAddCategory}
-        onEditPaymentMode={handleEditPaymentMode}
-        onDeletePaymentMode={handleDeletePaymentMode}
-        onEditCategory={handleEditCategory}
-        onDeleteCategory={handleDeleteCategory}
-        onEditParty={handleEditParty}
-        onDeleteParty={handleDeleteParty}
+        onRequestAdd={canManage ? (fieldKey, apply) => setOptModal({ fieldKey, locked: true, apply }) : undefined}
       />
+
+      {/* ── Common Options modal ── */}
+      {optModal && (
+        <OptionsModal
+          fields={optionFields}
+          fieldKey={optModal.fieldKey}
+          onFieldKeyChange={optModal.locked ? undefined : (key) => setOptModal({ fieldKey: key, locked: false })}
+          options={optionsFor(optModal.fieldKey)}
+          onClose={() => setOptModal(null)}
+          onAdd={handleOptionAdd}
+          onRename={handleOptionRename}
+          onDelete={handleOptionDelete}
+          onApply={optModal.apply}
+        />
+      )}
 
       {/* ── Modals ── */}
       {modal && (
@@ -1510,7 +1621,7 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                   <div><label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Book Name *</label><input name="name" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500" required defaultValue={editingBook?.name ?? ''} placeholder="e.g. Main Account, Petty Cash" /></div>
                   <div><label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Description</label><input name="description" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500" defaultValue={editingBook?.description ?? ''} placeholder="Optional description" /></div>
                   <div className="flex gap-3 pt-2">
-                    {editingBook && <button type="button" onClick={handleDeleteBook} className="px-4 py-2.5 rounded-xl border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50">Delete</button>}
+                    {editingBook && !editingBook.isAdminBook && <button type="button" onClick={handleDeleteBook} className="px-4 py-2.5 rounded-xl border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50">Delete</button>}
                     <button type="button" onClick={() => setModal(null)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
                     <button type="submit" disabled={loading} className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:opacity-60">{loading ? '...' : editingBook ? 'Save' : 'Create'}</button>
                   </div>
@@ -1586,48 +1697,12 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
 
             {/* View Entry */}
             {modal === 'view' && viewEntry && (
-              <div className="p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${viewEntry.type === 'OUT' ? 'bg-green-500' : 'bg-red-500'}`} />
-                    <h3 className="font-bold text-slate-900 text-lg">{viewEntry.type === 'OUT' ? 'Cash In' : 'Cash Out'}</h3>
-                  </div>
-                  <button type="button" onClick={() => setModal(null)} className="text-slate-400 hover:text-slate-700 text-xl">✕</button>
-                </div>
-                <div className={`text-3xl font-bold ${viewEntry.type === 'OUT' ? 'text-green-700' : 'text-red-600'}`}>
-                  {viewEntry.type === 'OUT' ? '' : '-'}₹{fmtAmt(viewEntry.amount)}
-                </div>
-                {[
-                  ['Date', fmtDate(viewEntry.date)],
-                  ['Details', viewEntry.description],
-                  ['Party', partyLabel(viewEntry.partyName, parties)],
-                  ['Category', viewEntry.category],
-                  ['Mode', viewEntry.paymentMode],
-                  ['Reference', viewEntry.reference],
-                  viewEntry.lpoNumber && ['LPO Number', viewEntry.lpoNumber],
-                  viewEntry.addedBy && ['Added By', viewEntry.addedBy],
-                  ...(() => {
-                    const vals = viewEntry.customFieldValues
-                      ? (typeof viewEntry.customFieldValues === 'string' ? JSON.parse(viewEntry.customFieldValues) : viewEntry.customFieldValues)
-                      : {}
-                    return customFields.filter(cf => vals[cf.id]).map(cf => [cf.label, vals[cf.id]])
-                  })(),
-                ].filter(Boolean).map(([k, v]: any) => v ? (
-                  <div key={k} className="flex justify-between py-2 border-b border-slate-100 last:border-0">
-                    <span className="text-slate-500 text-sm">{k}</span>
-                    <span className="text-slate-900 text-sm font-semibold text-right">{v}</span>
-                  </div>
-                ) : null)}
-                {viewEntry.proofUrl && (
-                  <a href={viewEntry.proofUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-700 text-sm font-semibold hover:underline pt-1">
-                    📎 View Attached Bill / Proof
-                  </a>
-                )}
-                <div className="flex gap-3 pt-2">
+              <EntryDetails entry={viewEntry} parties={parties} customFields={customFields} onClose={() => setModal(null)}>
+                {canManage && <div className="flex gap-3 pt-2">
                   <button type="button" onClick={() => { setModal(null); setDrawer({ open: true, entry: viewEntry }) }} className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700">Edit</button>
                   <button type="button" onClick={() => { handleDeleteEntry(viewEntry.id); setModal(null) }} className="flex-1 py-2.5 rounded-xl border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50">Delete</button>
-                </div>
-              </div>
+                </div>}
+              </EntryDetails>
             )}
 
             {/* Access */}
@@ -1637,22 +1712,41 @@ function CashbookViewInner({ siteId, siteName = '', initialBooks, initialParties
                   <h3 className="font-bold text-slate-900 text-lg">Book Access</h3>
                   <button type="button" onClick={() => setModal(null)} className="text-slate-400 hover:text-slate-700 text-xl">✕</button>
                 </div>
-                <p className="text-slate-500 text-xs">These users can access only this cashbook and nothing else in the system.</p>
-                {error && <div className="p-2 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{error}</div>}
+                {error &&<div className="p-2 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{error}</div>}
                 {ok && <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">✓ {ok}</div>}
-                {accessList.map((a: any) => (
-                  <div key={a.id} className="flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
-                    <div><p className="text-slate-900 text-sm font-semibold">{a.name}</p><p className="text-slate-400 text-xs">{a.email}</p></div>
-                    <button type="button" onClick={async () => { await deleteCashbookAccess(a.id, siteId); setAccessList(prev => prev.filter(x => x.id !== a.id)); flash('Revoked') }} className="text-xs px-2.5 py-1 rounded bg-red-50 border border-red-200 text-red-700 font-semibold">Revoke</button>
+                {/* Users with access to this book — picked from users who have permission for this site */}
+                {currentBook?.isAdminBook ? (
+                  <p className="text-slate-600 text-sm bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                    This is the site's <span className="font-semibold">Admin Book</span> — only admins can see it, and the site's Net P&L is calculated from it. It can't be shared with other users.
+                  </p>
+                ) : (
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Users with access</p>
+                  <p className="text-slate-500 text-xs">They can view this book and add entries — not edit or delete entries, or create or edit books.</p>
+                  {bookUsers.granted.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No users have access to this book yet</p>
+                  ) : bookUsers.granted.map(u => (
+                    <div key={u.id} className="flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
+                      <div>
+                        <p className="text-slate-900 text-sm font-semibold">{u.name}</p>
+                        <p className="text-slate-400 text-xs">{u.email}</p>
+                        {!u.hasSiteAccess && <p className="text-amber-600 text-xs font-semibold">No site permission — can't see this book</p>}
+                      </div>
+                      <button type="button" disabled={loading} onClick={() => changeBookUser(u.id, false)}
+                        className="text-xs px-2.5 py-1 rounded bg-red-50 border border-red-200 text-red-700 font-semibold disabled:opacity-50">Revoke</button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <select className="flex-1 border border-slate-300 rounded-lg px-3 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={grantUserId} onChange={e => setGrantUserId(e.target.value)}>
+                      <option value="">{bookUsers.available.length ? 'Select a user...' : 'No other users with site permission'}</option>
+                      {bookUsers.available.map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+                    </select>
+                    <button type="button" disabled={!grantUserId || loading} onClick={() => changeBookUser(grantUserId, true)}
+                      className="px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:opacity-50">Grant</button>
                   </div>
-                ))}
-                <form onSubmit={handleAddAccess} className="space-y-3 border-t border-slate-100 pt-3">
-                  <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Create New Access</p>
-                  <input name="name" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" required placeholder="Full name" />
-                  <input name="email" type="email" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" required placeholder="Email" />
-                  <input name="password" type="password" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" required minLength={6} placeholder="Password (min 6 chars)" />
-                  <button type="submit" disabled={loading} className="w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:opacity-60">{loading ? '...' : 'Create Access'}</button>
-                </form>
+                </div>
+                )}
               </div>
             )}
           </div>

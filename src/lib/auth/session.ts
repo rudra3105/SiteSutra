@@ -7,10 +7,8 @@ const COOKIE_NAME = 'sitesutra_session'
 export interface SessionPayload {
   userId:     string
   email:      string
-  role:       'ADMIN' | 'SUPERVISOR' | 'CASHBOOK_ACCESS'
+  role:       'ADMIN' | 'SUPERVISOR'
   name:       string
-  cashbookId?: string
-  siteId?:    string
 }
 
 export async function createSession(payload: SessionPayload) {
@@ -37,6 +35,8 @@ export async function getSession(): Promise<SessionPayload | null> {
     const token = cookieStore.get(COOKIE_NAME)?.value
     if (!token) return null
     const { payload } = await jwtVerify(token, SECRET)
+    // Sessions from the removed single-book login system are treated as signed out
+    if (payload.role !== 'ADMIN' && payload.role !== 'SUPERVISOR') return null
     return payload as unknown as SessionPayload
   } catch {
     return null

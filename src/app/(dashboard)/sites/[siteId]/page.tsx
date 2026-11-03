@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 import { getWorkLogs } from '@/actions/worklogs'
 import { getLabourBySite } from '@/actions/labour'
 import { getMaterialsBySite } from '@/actions/materials'
-import { getFinancialSummary } from '@/actions/accounting'
+import { getAdminBookSummary } from '@/actions/cashbook'
 import { getSession } from '@/lib/auth/session'
 import { db, workTypes } from '@/lib/db'
 import { eq } from 'drizzle-orm'
@@ -37,7 +37,8 @@ export default async function SiteOverviewPage({ params }: any) {
     db.select().from(workTypes).where(eq(workTypes.siteId, siteId)),
   ])
 
-  const financials = isAdmin ? await getFinancialSummary(siteId) : null
+  // Admin-only: Net P&L from the site's Admin Book alone (not the other books)
+  const financials = isAdmin ? await getAdminBookSummary(siteId) : null
 
   return (
     <div className="space-y-5">
@@ -63,8 +64,9 @@ export default async function SiteOverviewPage({ params }: any) {
           <div className="card p-4 text-center">
             <p className="text-slate-600 text-xs font-semibold uppercase tracking-wider mb-1">Net P&L</p>
             <p className={`text-2xl font-bold ${financials.net >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-              {financials.net >= 0 ? '+' : ''}{inr(financials.net)}
+              {financials.net >= 0 ? '+' : '-'}{inr(Math.abs(financials.net))}
             </p>
+            <p className="text-slate-400 text-[10px] mt-0.5">Admin Book</p>
           </div>
         ) : (
           <div className="card p-4 text-center">
@@ -158,22 +160,22 @@ export default async function SiteOverviewPage({ params }: any) {
         {financials && (
           <div className="card p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-slate-900 text-sm">Financials</h3>
+              <h3 className="font-bold text-slate-900 text-sm">Financials <span className="text-slate-400 font-normal text-xs">· Admin Book</span></h3>
               <Link href={`/sites/${siteId}/accounting`} className="text-orange-600 text-xs font-semibold hover:underline">View all &rarr;</Link>
             </div>
             <div>
               <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-600 text-sm">Income</span>
+                <span className="text-slate-600 text-sm">Cash In</span>
                 <span className="text-emerald-700 font-bold">{inr(financials.income)}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-600 text-sm">Expenses</span>
+                <span className="text-slate-600 text-sm">Cash Out</span>
                 <span className="text-red-700 font-bold">{inr(financials.expense)}</span>
               </div>
               <div className="flex justify-between py-2">
                 <span className="text-slate-900 font-semibold text-sm">Net P&L</span>
                 <span className={'font-bold text-lg ' + (financials.net >= 0 ? 'text-emerald-700' : 'text-red-700')}>
-                  {financials.net >= 0 ? '+' : ''}{inr(financials.net)}
+                  {financials.net >= 0 ? '+' : '-'}{inr(Math.abs(financials.net))}
                 </span>
               </div>
             </div>

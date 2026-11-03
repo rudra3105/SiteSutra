@@ -41,7 +41,7 @@ export default async function AccountingPage() {
           <div className="card p-4 text-center">
             <div className="text-xs text-slate-600 mb-1">Net P&L</div>
             <div className={`font-bold text-lg ${dashboard.netAmount >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-              {dashboard.netAmount >= 0 ? '+' : ''}{inr(dashboard.netAmount)}
+              {dashboard.netAmount >= 0 ? '+' : '-'}{inr(Math.abs(dashboard.netAmount))}
             </div>
           </div>
         </div>

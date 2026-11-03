@@ -193,6 +193,9 @@ export const cashbooks = sqliteTable('cashbooks', {
   name:        text('name').notNull(),
   description: text('description'),
   isActive:    integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  // 1 = the site's Admin Book: created automatically, admin-only, and the only
+  // book the site Overview's Net P&L is calculated from
+  isAdminBook: integer('is_admin_book').notNull().default(0),
   createdAt:   text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt:   text('updated_at').notNull().default(sql`(datetime('now'))`),
 })
@@ -357,6 +360,22 @@ export const customPaymentMethods = sqliteTable('custom_payment_methods', {
   name:      text('name').notNull(),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 })
+
+// ── Custom Categories (site-wide Accounting category list) ─────
+export const customCategories = sqliteTable('custom_categories', {
+  id:        text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  siteId:    text('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  name:      text('name').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+})
+
+// ── Cashbook Supervisors (which supervisor users may open which book) ─
+export const cashbookSupervisors = sqliteTable('cashbook_supervisors', {
+  id:         text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  cashbookId: text('cashbook_id').notNull().references(() => cashbooks.id, { onDelete: 'cascade' }),
+  userId:     text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt:  text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (t) => ({ uniq: sqliteUnique().on(t.cashbookId, t.userId) }))
 
 // ── Cashbook Access ────────────────────────────────────────────
 export const cashbookAccess = sqliteTable('cashbook_access', {

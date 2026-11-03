@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/auth/session'
 import { db, sites, workLogs, workTypes, materialLogs, materials, attendance, labour, accounting, lpos, users } from '@/lib/db'
 import { eq, and, gte, lte } from 'drizzle-orm'
+import { ROBOTO_LINK, PRINT_FONT } from '@/lib/print'
 
 function toCSV(rows: Record<string, unknown>[], columns: { key: string; label: string }[]): string {
   const header = columns.map(c => `"${c.label}"`).join(',')
@@ -30,9 +31,10 @@ function buildPDFHTML(title: string, siteName: string, sections: { heading: stri
 <head>
 <meta charset="utf-8"/>
 <title>${title}</title>
+${ROBOTO_LINK}
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 20px; }
+  body { font-family: ${PRINT_FONT}; font-size: 11px; color: #111; padding: 20px; }
   h1 { font-size: 18px; margin-bottom: 4px; color: #ea580c; }
   .meta { color: #666; font-size: 10px; margin-bottom: 20px; }
   h2 { font-size: 13px; margin: 20px 0 8px; color: #333; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }

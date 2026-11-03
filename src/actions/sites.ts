@@ -2,6 +2,7 @@
 // @ts-nocheck
 
 import { db, sites, siteAccess, users, workLogs, labour, materialLogs } from '@/lib/db'
+import { ensureAdminBook } from '@/actions/cashbook'
 import { requireSession, requireAdmin } from '@/lib/auth/session'
 import { eq, and, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -30,6 +31,7 @@ export async function createSite(formData: FormData) {
     ...parsed.data,
     createdById: session.userId,
   })
+  await ensureAdminBook(id)
 
   revalidatePath('/sites')
   return { success: true, id }
